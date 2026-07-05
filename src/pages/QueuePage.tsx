@@ -1,6 +1,6 @@
 // หน้าหลัก: ระบบจัดคิวหมอ GTA V RP (พร้อมระบบสิทธิ์)
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/db/supabase';
+import { subscribeStore } from '@/store/store';
 import {
   fetchDoctors, fetchOperator, fetchQueueState,
   updateDoctorStatus, returnDoctorToOp,
@@ -122,14 +122,8 @@ export default function QueuePage() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  useEffect(() => {
-    const channel = supabase.channel('queue-rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'doctors' }, () => fetchDoctors().then(setDoctors))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'operator' }, () => fetchOperator().then(setOperatorState))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'queue_state' }, () => fetchQueueState().then(setQueueState))
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, []);
+  // sync real-time ผ่าน BroadcastChannel (cross-tab)
+  useEffect(() => subscribeStore(loadAll), [loadAll]);
 
   const opDoctors = doctors.filter(d => d.status === 'op').sort((a, b) => a.queue_order - b.queue_order);
   const byStatus = (s: DoctorStatus) => doctors.filter(d => d.status === s);

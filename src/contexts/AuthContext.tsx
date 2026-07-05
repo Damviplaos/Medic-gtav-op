@@ -1,117 +1,106 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { supabase } from '@/db/supabase';
-import type { User } from '@supabase/supabase-js';
+/**
+ * AuthContext – ระบบ auth แบบ file-based (localStorage)
+ * ไม่ใช้ Supabase Auth เลย
+ */
+import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from 'react';
+import {
+  initStore, sha256Hex,
+  storeGetUserByUsername, storeGetUsers, hydrateUser,
+  storeStartSession, storeEndSession,
+  subscribeStore,
+} from '@/store/store';
 import type { UserProfile } from '@/types/index';
 
+const SESSION_KEY = 'gtav_current_session';
+interface LocalSession { userId: string; sessionId: string; }
+
+// user มีแค่ id เพื่อ backward-compat กับ pages ที่เช็ค if (!user)
+type SimpleUser = { id: string };
+
 interface AuthContextType {
-  user: User | null;
+  user: SimpleUser | null;
   profile: UserProfile | null;
   loading: boolean;
-  signInWithUsername: (username: string, password: string) => Promise<{ error: Error | null; sessionId?: string }>;
-  signOut: () => Promise<void>;
-  refreshProfile: () => Promise<void>;
-  /** id ของ work session ที่ active อยู่ */
+  signInWithUsername: (username: string, password: string) => Promise<{ error: Error | null }>;
+  signOut: () => void;
+  refreshProfile: () => void;
   activeSessionId: string | null;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-async function loadProfile(userId: string): Promise<UserProfile | null> {
-  const { data } = await supabase
-    .from('user_profiles')
-    .select('*, role:roles(*)')
-    .eq('id', userId)
-    .maybeSingle();
-  return data as UserProfile | null;
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<SimpleUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 
-  const refreshProfile = async () => {
-    if (!user) { setProfile(null); return; }
-    const p = await loadProfile(user.id);
-    setProfile(p);
-  };
-
-  // เริ่ม work session เมื่อ login
-  const startSession = async (userId: string) => {
-    const { data } = await supabase
-      .from('work_sessions')
-      .insert({ user_id: userId, login_at: new Date().toISOString() })
-      .select('id')
-      .maybeSingle();
-    if (data) setActiveSessionId(data.id);
-  };
-
-  // จบ work session เมื่อ logout
-  const endSession = async (sessionId: string) => {
-    await supabase
-      .from('work_sessions')
-      .update({ logout_at: new Date().toISOString() })
-      .eq('id', sessionId);
-    setActiveSessionId(null);
-  };
-
-  useEffect(() => {
-    supabase.auth.getSession()
-      .then(({ data: { session } }) => {
-        setUser(session?.user ?? null);
-        if (session?.user) {
-          loadProfile(session.user.id).then(setProfile);
-        }
-      })
-      .finally(() => setLoading(false));
-
-    // In this function, do NOT use any await calls. Use `.then()` instead to avoid deadlocks.
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        loadProfile(session.user.id).then(setProfile);
-      } else {
-        setProfile(null);
-      }
-    });
-
-    return () => subscription.unsubscribe();
+  const loadFromSession = useCallback(() => {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) { setUser(null); setProfile(null); return; }
+    const { userId } = JSON.parse(raw) as LocalSession;
+    const u = storeGetUsers().find(x => x.id === userId);
+    if (u) {
+      setUser({ id: u.id });
+      setProfile(hydrateUser(u));
+    } else {
+      localStorage.removeItem(SESSION_KEY);
+      setUser(null);
+      setProfile(null);
+    }
   }, []);
 
-  // จัดการ beforeunload เพื่อบันทึก logout อัตโนมัติเมื่อปิดหน้าต่าง
+  const refreshProfile = useCallback(() => { loadFromSession(); }, [loadFromSession]);
+
+  useEffect(() => {
+    initStore().then(() => {
+      const raw = localStorage.getItem(SESSION_KEY);
+      if (raw) {
+        const { userId, sessionId } = JSON.parse(raw) as LocalSession;
+        const u = storeGetUsers().find(x => x.id === userId);
+        if (u) {
+          setUser({ id: u.id });
+          setProfile(hydrateUser(u));
+          setActiveSessionId(sessionId);
+        } else {
+          localStorage.removeItem(SESSION_KEY);
+        }
+      }
+      setLoading(false);
+    });
+    return subscribeStore(loadFromSession);
+  }, [loadFromSession]);
+
   useEffect(() => {
     if (!activeSessionId) return;
-    const handleUnload = () => {
-      // ใช้ sendBeacon สำหรับ async ที่ไม่ block
-      const payload = JSON.stringify({ session_id: activeSessionId });
-      navigator.sendBeacon?.(`/api/logout-session?id=${activeSessionId}`, payload);
-    };
+    const handleUnload = () => storeEndSession(activeSessionId);
     window.addEventListener('beforeunload', handleUnload);
     return () => window.removeEventListener('beforeunload', handleUnload);
   }, [activeSessionId]);
 
   const signInWithUsername = async (username: string, password: string) => {
     try {
-      const email = `${username.toLowerCase().trim()}@gtav-queue.app`;
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) throw error;
-      if (data.user) {
-        const p = await loadProfile(data.user.id);
-        setProfile(p);
-        await startSession(data.user.id);
-      }
+      const stored = storeGetUserByUsername(username);
+      if (!stored) throw new Error('Invalid login credentials');
+      const hash = await sha256Hex(password);
+      if (hash !== stored.password_hash) throw new Error('Invalid login credentials');
+      const sessionId = storeStartSession(stored.id);
+      localStorage.setItem(SESSION_KEY, JSON.stringify({ userId: stored.id, sessionId } satisfies LocalSession));
+      setUser({ id: stored.id });
+      setProfile(hydrateUser(stored));
+      setActiveSessionId(sessionId);
       return { error: null };
-    } catch (error) {
-      return { error: error as Error };
+    } catch (err) {
+      return { error: err as Error };
     }
   };
 
-  const signOut = async () => {
-    if (activeSessionId) await endSession(activeSessionId);
-    await supabase.auth.signOut();
+  const signOut = () => {
+    if (activeSessionId) storeEndSession(activeSessionId);
+    localStorage.removeItem(SESSION_KEY);
     setUser(null);
     setProfile(null);
+    setActiveSessionId(null);
   };
 
   return (
@@ -122,7 +111,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 }
 
 export function useAuth() {
-  const context = useContext(AuthContext);
-  if (context === undefined) throw new Error('useAuth must be used within an AuthProvider');
-  return context;
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used within an AuthProvider');
+  return ctx;
 }

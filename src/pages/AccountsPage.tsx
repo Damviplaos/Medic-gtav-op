@@ -87,7 +87,7 @@ export default function AccountsPage() {
     if (newPwd.length < 6) { toast.error('รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร'); return; }
     setSaving(true);
     try {
-      await updateProfilePassword(newPwd);
+      await updateProfilePassword(user?.id ?? '', newPwd);
       toast.success('เปลี่ยนรหัสผ่านสำเร็จ');
       setPwdTarget(null);
       setNewPwd('');
