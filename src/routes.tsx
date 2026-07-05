@@ -6,6 +6,7 @@ import AccountsPage from './pages/AccountsPage';
 import DashboardPage from './pages/DashboardPage';
 import OverviewDashboard from './pages/OverviewDashboard';
 import WarningsPage from './pages/WarningsPage';
+import PromotionPage from './pages/PromotionPage';
 import type { ReactNode } from 'react';
 
 export interface RouteConfig {
@@ -13,7 +14,6 @@ export interface RouteConfig {
   path: string;
   element: ReactNode;
   visible?: boolean;
-  /** เข้าถึงได้โดยไม่ต้อง login */
   public?: boolean;
 }
 
@@ -22,6 +22,7 @@ export const routes: RouteConfig[] = [
   { name: 'เข้าสู่ระบบ', path: '/login', element: <LoginPage />, public: true },
   { name: 'Dashboard', path: '/dashboard', element: <DashboardPage />, public: false },
   { name: 'ภาพรวม', path: '/overview', element: <OverviewDashboard />, public: false },
+  { name: 'คุณสมบัติสอบเลื่อนยศ', path: '/promotion', element: <PromotionPage />, public: false },
   { name: 'จัดการบัญชี', path: '/accounts', element: <AccountsPage />, public: false },
   { name: 'จัดการยศ', path: '/roles', element: <RolesPage />, public: false },
   { name: 'ใบเตือน', path: '/warnings', element: <WarningsPage />, public: false },

@@ -5,7 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { usePermissions } from '@/hooks/use-permissions';
 import {
   Stethoscope, Home, BarChart2, Users, Shield,
-  AlertTriangle, Settings, LogOut, Menu, X, ChevronRight,
+  AlertTriangle, Settings, LogOut, Menu, X, TrendingUp, ChevronRight,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -37,6 +37,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       icon: <BarChart2 className="w-4 h-4" />,
       permission: () => can('can_view_overview_dashboard') || isDirector,
     },
+    // คุณสมบัติสอบเลื่อนยศ — ทุกคนเห็น
+    { to: '/promotion', label: 'คุณสมบัติเลื่อนยศ', icon: <TrendingUp className="w-4 h-4" /> },
     {
       to: '/accounts',
       label: 'จัดการบัญชี',

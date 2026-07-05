@@ -77,6 +77,17 @@ export interface Doctor {
 export interface Operator {
   id: string;
   name: string;
+  user_id: string | null; // id ของ user ที่กด "ขึ้นเป็น OP"
+  created_at: string;
+}
+
+// ─── OP Session (บันทึกชั่วโมงรัน OP) ─────────────────────────────────────
+export interface OpSession {
+  id: string;
+  user_id: string;
+  start_at: string;
+  end_at: string | null;
+  duration_minutes: number | null;
   created_at: string;
 }
 

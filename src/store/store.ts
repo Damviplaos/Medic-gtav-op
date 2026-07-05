@@ -6,7 +6,7 @@
 
 import type {
   Role, Doctor, DoctorStatus, Operator, QueueState,
-  WorkSession, Warning, Permission,
+  WorkSession, Warning, Permission, OpSession,
 } from '@/types/index';
 import type { StoredUser } from '@/data/seed';
 import {
@@ -23,8 +23,9 @@ const K = {
   QUEUE_STATE: 'gtav_queue_state',
   SETTINGS: 'gtav_settings',
   SESSIONS: 'gtav_sessions',
+  OP_SESSIONS: 'gtav_op_sessions',
   WARNINGS: 'gtav_warnings',
-  SEEDED: 'gtav_seeded_v2',
+  SEEDED: 'gtav_seeded_v3',
 } as const;
 
 // ─── BroadcastChannel (sync ระหว่าง tabs) ────────────────────────────────────
@@ -93,6 +94,7 @@ export async function initStore(): Promise<void> {
   write(K.QUEUE_STATE, SEED_QUEUE_STATE);
   write(K.SETTINGS, SEED_SETTINGS);
   write(K.SESSIONS, EMPTY_SESSIONS);
+  write(K.OP_SESSIONS, []);
   write(K.WARNINGS, EMPTY_WARNINGS);
   localStorage.setItem(K.SEEDED, '1');
 }
@@ -281,12 +283,19 @@ export function storeGetOperator(): Operator | null {
   return read<Operator | null>(K.OPERATOR);
 }
 
-export function storeSetOperator(name: string): void {
-  write(K.OPERATOR, { id: crypto.randomUUID(), name, created_at: new Date().toISOString() });
+export function storeSetOperator(name: string, userId: string | null): void {
+  // ถ้ามี op เก่าอยู่ ให้จบ op session ก่อน
+  const prev = storeGetOperator();
+  if (prev?.user_id) storeEndOpSession(prev.user_id);
+  write(K.OPERATOR, { id: crypto.randomUUID(), name, user_id: userId, created_at: new Date().toISOString() });
+  // เริ่ม op session ใหม่
+  if (userId) storeStartOpSession(userId);
   broadcast();
 }
 
 export function storeClearOperator(): void {
+  const prev = storeGetOperator();
+  if (prev?.user_id) storeEndOpSession(prev.user_id);
   write(K.OPERATOR, null);
   broadcast();
 }
@@ -367,6 +376,52 @@ export function calcMinutes(sessions: WorkSession[]): number {
   return sessions.reduce((acc, s) => {
     if (s.duration_minutes != null) return acc + s.duration_minutes;
     if (!s.logout_at) return acc + (Date.now() - new Date(s.login_at).getTime()) / 60000;
+    return acc;
+  }, 0);
+}
+
+// ─── OP Sessions ──────────────────────────────────────────────────────────────
+export function storeGetOpSessions(): OpSession[] {
+  return read<OpSession[]>(K.OP_SESSIONS) ?? [];
+}
+
+export function storeStartOpSession(userId: string): string {
+  // จบ session เก่าของ user นี้ก่อน (ถ้ามี)
+  storeEndOpSession(userId);
+  const id = crypto.randomUUID();
+  const sessions = storeGetOpSessions();
+  write(K.OP_SESSIONS, [...sessions, {
+    id, user_id: userId, start_at: new Date().toISOString(),
+    end_at: null, duration_minutes: null, created_at: new Date().toISOString(),
+  }]);
+  return id;
+}
+
+export function storeEndOpSession(userId: string): void {
+  const sessions = storeGetOpSessions();
+  const now = new Date().toISOString();
+  write(K.OP_SESSIONS, sessions.map(s => {
+    if (s.user_id !== userId || s.end_at !== null) return s;
+    const mins = (Date.now() - new Date(s.start_at).getTime()) / 60000;
+    return { ...s, end_at: now, duration_minutes: Math.round(mins) };
+  }));
+}
+
+export function storeGetUserOpSessions(userId: string, fromDate?: string, toDate?: string): OpSession[] {
+  return storeGetOpSessions()
+    .filter(s => {
+      if (s.user_id !== userId) return false;
+      if (fromDate && s.start_at < fromDate) return false;
+      if (toDate && s.start_at > toDate) return false;
+      return true;
+    })
+    .sort((a, b) => b.start_at.localeCompare(a.start_at));
+}
+
+export function calcOpMinutes(sessions: OpSession[]): number {
+  return sessions.reduce((acc, s) => {
+    if (s.duration_minutes != null) return acc + s.duration_minutes;
+    if (!s.end_at) return acc + (Date.now() - new Date(s.start_at).getTime()) / 60000;
     return acc;
   }, 0);
 }

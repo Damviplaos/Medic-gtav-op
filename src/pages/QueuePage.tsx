@@ -9,7 +9,7 @@ import {
 import type { Doctor, DoctorStatus, Operator, QueueState } from '@/types/index';
 import { STATUS_LABELS } from '@/types/index';
 import { toast } from 'sonner';
-import { ChevronRight, UserMinus, UserCheck, RefreshCw } from 'lucide-react';
+import { ChevronRight, UserMinus, RefreshCw, Shuffle, Star, StarOff } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePermissions } from '@/hooks/use-permissions';
 import AppLayout from '@/components/layouts/AppLayout';
@@ -21,7 +21,7 @@ interface DoctorRowProps {
   doctor: Doctor;
   isPointed: boolean;
   currentStatus: DoctorStatus;
-  canControl: boolean; // กดเมนูได้ไหม (ตัวเอง หรือมีสิทธิ์)
+  canControl: boolean;
   onChangeStatus: (id: string, status: DoctorStatus) => void;
   onReturnToOp: (id: string) => void;
 }
@@ -57,23 +57,17 @@ function DoctorRow({ doctor, isPointed, currentStatus, canControl, onChangeStatu
       <span className={`w-3 h-3 rounded-full shrink-0 ${dotClass}`} />
       <span className="flex-1 min-w-0 text-sm md:text-base text-foreground font-medium truncate">{doctor.name}</span>
       <span className={`text-base w-5 shrink-0 text-center ${isPointed ? 'pointer-bounce' : 'opacity-0'}`}>👈</span>
-
       {canControl ? (
         <div className="relative shrink-0">
-          <button
-            onClick={() => setMenuOpen(v => !v)}
-            className="flex items-center gap-0.5 px-2 py-1 text-xs rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-          >
+          <button onClick={() => setMenuOpen(v => !v)}
+            className="flex items-center gap-0.5 px-2 py-1 text-xs rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
             เมนู <ChevronRight className={`w-3 h-3 transition-transform ${menuOpen ? 'rotate-90' : ''}`} />
           </button>
           {menuOpen && (
             <div className="absolute right-0 top-full mt-1 z-50 min-w-[130px] bg-card border border-border rounded-lg shadow-xl overflow-hidden">
               {menuItems.map(item => (
-                <button
-                  key={item.label}
-                  onClick={() => { item.action(); setMenuOpen(false); }}
-                  className={`w-full text-left px-3 py-2 text-sm hover:bg-primary/10 transition-colors ${item.className ?? 'text-foreground'}`}
-                >
+                <button key={item.label} onClick={() => { item.action(); setMenuOpen(false); }}
+                  className={`w-full text-left px-3 py-2 text-sm hover:bg-primary/10 transition-colors ${item.className ?? 'text-foreground'}`}>
                   {item.label}
                 </button>
               ))}
@@ -81,13 +75,12 @@ function DoctorRow({ doctor, isPointed, currentStatus, canControl, onChangeStatu
           )}
         </div>
       ) : (
-        <span className="w-14 shrink-0" /> // placeholder เพื่อ alignment
+        <span className="w-14 shrink-0" />
       )}
     </div>
   );
 }
 
-// ─── SectionBlock ─────────────────────────────────────────────────────────────
 function SectionBlock({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
@@ -106,9 +99,7 @@ export default function QueuePage() {
   const [operator, setOperatorState] = useState<Operator | null>(null);
   const [queueState, setQueueState] = useState<QueueState | null>(null);
   const [loading, setLoading] = useState(true);
-  const [opNameInput, setOpNameInput] = useState('');
-  const [showOpInput, setShowOpInput] = useState(false);
-  const [settingOp, setSettingOp] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   const loadAll = useCallback(async () => {
     try {
@@ -121,21 +112,54 @@ export default function QueuePage() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
-
-  // sync real-time ผ่าน BroadcastChannel (cross-tab)
   useEffect(() => subscribeStore(loadAll), [loadAll]);
 
   const opDoctors = doctors.filter(d => d.status === 'op').sort((a, b) => a.queue_order - b.queue_order);
   const byStatus = (s: DoctorStatus) => doctors.filter(d => d.status === s);
   const safePointer = opDoctors.length === 0 ? -1 : Math.min(queueState?.pointer_index ?? 0, opDoctors.length - 1);
 
-  // ตรวจว่าสามารถกดเมนูของ doctor คนนี้ได้ไหม
+  // ตรวจว่าผู้ใช้ปัจจุบันเป็นคนรัน OP อยู่ไหม
+  const isCurrentOp = !!(operator && operator.user_id && operator.user_id === user?.id);
+  // ตรวจสิทธิ์กดถัดไป: ต้องเป็นคนรัน OP อยู่ หรือมีสิทธิ์พิเศษ
+  const canNext = isCurrentOp || (can('can_next_queue') && !operator);
+
   const canControlDoctor = (doc: Doctor): boolean => {
     if (!user) return false;
-    // ตรวจว่า doctor linked กับ user profile นี้ไหม
     const isOwn = profile?.doctor_id === doc.id;
-    const hasOtherControl = can('can_change_others_status');
-    return isOwn || hasOtherControl;
+    return isOwn || can('can_change_others_status');
+  };
+
+  // ขึ้นเป็นคนรัน OP (ตัวเอง)
+  const handleBecomeOp = async () => {
+    if (!user || !profile) { toast.error('กรุณาเข้าสู่ระบบก่อน'); return; }
+    setBusy(true);
+    try {
+      await setOperator(profile.display_name, user.id);
+      toast.success(`${profile.display_name} ขึ้นเป็นคนรัน OP แล้ว`);
+    } catch { toast.error('เกิดข้อผิดพลาด'); }
+    finally { setBusy(false); }
+  };
+
+  // เลิกเป็นคนรัน OP
+  const handleLeaveOp = async () => {
+    setBusy(true);
+    try {
+      await clearOperator();
+      toast.success('เลิกเป็นคนรัน OP แล้ว');
+    } catch { toast.error('เกิดข้อผิดพลาด'); }
+    finally { setBusy(false); }
+  };
+
+  // สุ่มคนรัน OP จากคิว OP
+  const handleRandomOp = async () => {
+    if (opDoctors.length === 0) { toast.error('ไม่มีหมอในคิว OP'); return; }
+    setBusy(true);
+    try {
+      const pick = opDoctors[Math.floor(Math.random() * opDoctors.length)];
+      await setOperator(pick.name, null);
+      toast.success(`สุ่มได้ "${pick.name}" เป็นคนรัน OP`);
+    } catch { toast.error('เกิดข้อผิดพลาด'); }
+    finally { setBusy(false); }
   };
 
   const handleNext = async () => {
@@ -161,17 +185,8 @@ export default function QueuePage() {
     } catch { toast.error('กลับเข้าคิวล้มเหลว'); }
   };
 
-  const handleSetOp = async () => {
-    if (!opNameInput.trim()) return;
-    setSettingOp(true);
-    try {
-      await setOperator(opNameInput.trim());
-      setShowOpInput(false);
-      setOpNameInput('');
-      toast.success(`ตั้ง "${opNameInput.trim()}" เป็นคนรัน OP`);
-    } catch { toast.error('ตั้งค่า OP ล้มเหลว'); }
-    finally { setSettingOp(false); }
-  };
+  // admin/ผู้มีสิทธิ์สามารถเคลียร์ OP ของคนอื่นได้
+  const canClearOthersOp = can('can_set_operator');
 
   if (loading) return (
     <AppLayout>
@@ -184,57 +199,65 @@ export default function QueuePage() {
   return (
     <AppLayout>
       <div className="max-w-lg mx-auto p-4">
-        {/* Header row */}
+        {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-base font-bold text-foreground">หน้าคิว OP</h2>
-          {can('can_next_queue') && (
-            <button
-              onClick={handleNext}
-              disabled={opDoctors.length === 0}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-semibold hover:opacity-90 disabled:opacity-40 transition-opacity"
-            >
+          {canNext && (
+            <button onClick={handleNext} disabled={opDoctors.length === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-semibold hover:opacity-90 disabled:opacity-40 transition-opacity">
               <ChevronRight className="w-4 h-4" /> ถัดไป
             </button>
           )}
         </div>
 
-        {/* คนรัน OP */}
-        <div className="text-center py-2 space-y-1 mb-2">
-          <p className="text-xs font-semibold text-muted-foreground tracking-widest uppercase">คนรัน op</p>
+        {/* ส่วนคนรัน OP */}
+        <div className="bg-card border border-border rounded-lg p-4 mb-4 space-y-3">
+          <p className="text-xs font-semibold text-muted-foreground tracking-widest uppercase text-center">คนรัน OP</p>
+
           {operator ? (
             <div className="flex items-center justify-center gap-2">
               <span className="w-3 h-3 rounded-full status-dot-op shrink-0" />
               <span className="text-base font-bold text-foreground">{operator.name}</span>
-              {can('can_set_operator') && (
-                <button onClick={() => clearOperator().then(() => toast.success('เคลียร์ OP แล้ว'))}
-                  className="ml-1 p-0.5 text-muted-foreground hover:text-destructive transition-colors">
+              {isCurrentOp && (
+                <span className="text-xs px-1.5 py-0.5 bg-primary/20 text-primary rounded-full font-medium">คุณ</span>
+              )}
+              {/* เลิกเป็น OP ถ้าเป็นตัวเอง หรือมีสิทธิ์เคลียร์คนอื่น */}
+              {(isCurrentOp || canClearOthersOp) && (
+                <button onClick={handleLeaveOp} disabled={busy}
+                  className="ml-1 p-1 text-muted-foreground hover:text-destructive transition-colors">
                   <UserMinus className="w-3.5 h-3.5" />
                 </button>
               )}
             </div>
           ) : (
-            <div className="flex flex-col items-center gap-2">
-              <span className="text-muted-foreground text-sm">— ยังไม่มีคนรัน OP —</span>
-              {can('can_set_operator') && !showOpInput && (
-                <button onClick={() => setShowOpInput(true)}
-                  className="flex items-center gap-1.5 text-xs px-2.5 py-1 border border-border rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
-                  <UserCheck className="w-3.5 h-3.5" /> ตั้งคนรัน OP
-                </button>
-              )}
-            </div>
+            <p className="text-center text-muted-foreground text-sm">— ยังไม่มีคนรัน OP —</p>
           )}
-          {showOpInput && can('can_set_operator') && (
-            <div className="flex gap-2 mt-2 max-w-xs mx-auto">
-              <input type="text" value={opNameInput} onChange={e => setOpNameInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleSetOp()} placeholder="ชื่อคนรัน OP" autoFocus
-                className="flex-1 min-w-0 px-2 py-1.5 bg-input border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
-              <button onClick={handleSetOp} disabled={settingOp}
-                className="px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 disabled:opacity-60 shrink-0">
-                {settingOp ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : 'ยืนยัน'}
+
+          {/* ปุ่ม 3 ตัว */}
+          <div className="flex gap-2 justify-center flex-wrap">
+            {!isCurrentOp && (
+              <button onClick={handleBecomeOp} disabled={busy}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-semibold hover:opacity-90 disabled:opacity-60 transition-opacity">
+                <Star className="w-3.5 h-3.5" />
+                ขึ้นเป็น OP
               </button>
-              <button onClick={() => setShowOpInput(false)}
-                className="px-2 py-1.5 border border-border rounded-md text-sm text-muted-foreground hover:bg-muted shrink-0">ยกเลิก</button>
-            </div>
+            )}
+            {isCurrentOp && (
+              <button onClick={handleLeaveOp} disabled={busy}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-destructive/80 text-white rounded-md text-sm font-semibold hover:opacity-90 disabled:opacity-60 transition-opacity">
+                <StarOff className="w-3.5 h-3.5" />
+                เลิกเป็น OP
+              </button>
+            )}
+            <button onClick={handleRandomOp} disabled={busy || opDoctors.length === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-border text-foreground rounded-md text-sm font-medium hover:bg-muted disabled:opacity-60 transition-colors">
+              <Shuffle className="w-3.5 h-3.5" />
+              สุ่ม
+            </button>
+          </div>
+
+          {!canNext && operator && !isCurrentOp && (
+            <p className="text-center text-xs text-muted-foreground">เฉพาะคนรัน OP เท่านั้นที่กดถัดไปได้</p>
           )}
         </div>
 
@@ -281,3 +304,4 @@ export default function QueuePage() {
     </AppLayout>
   );
 }
+

@@ -10,6 +10,7 @@ import {
   storeGetQueueState, storeUpdatePointerIndex,
   storeGetSetting, storeUpdateSetting,
   storeGetUserSessions, storeGetAllSessions, calcMinutes,
+  storeGetUserOpSessions, calcOpMinutes,
   storeGetWarningsWithProfiles, storeGetMyWarnings, storeIssueWarning,
 } from '@/store/store';
 
@@ -98,8 +99,9 @@ export async function fetchOperator(): Promise<Operator | null> {
   return storeGetOperator();
 }
 
-export async function setOperator(name: string): Promise<void> {
-  storeSetOperator(name);
+/** ขึ้นเป็นคนรัน OP (ใส่ชื่อ + user_id) */
+export async function setOperator(name: string, userId: string | null = null): Promise<void> {
+  storeSetOperator(name, userId);
 }
 
 export async function clearOperator(): Promise<void> {
@@ -142,6 +144,13 @@ export async function fetchAllSessions(fromDate?: string, toDate?: string): Prom
 }
 
 export { calcMinutes };
+
+// ─── OP Sessions ──────────────────────────────────────────────────────────────
+export async function fetchUserOpSessions(userId: string, fromDate?: string, toDate?: string) {
+  return storeGetUserOpSessions(userId, fromDate, toDate);
+}
+
+export { calcOpMinutes };
 
 // ─── Warnings ─────────────────────────────────────────────────────────────────
 export async function fetchAllWarnings(): Promise<Warning[]> {

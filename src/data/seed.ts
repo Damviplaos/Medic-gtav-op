@@ -187,6 +187,7 @@ export const SEED_USERS: StoredUser[] = [
 export const SEED_SETTINGS: Record<string, string> = {
   server_url: '',
   required_hours_per_week: '20',
+  required_op_hours_per_week: '5',
 };
 
 export const SEED_QUEUE_STATE = {

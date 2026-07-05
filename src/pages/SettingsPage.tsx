@@ -10,12 +10,39 @@ import AppLayout from '@/components/layouts/AppLayout';
 import { toast } from 'sonner';
 import { Settings, Plus, Trash2, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 
+// ฟิลด์ชั่วโมงแบบ decimal (เช่น 1.5 = 1 ชั่วโมง 30 นาที)
+function HoursInput({
+  label, description, value, onChange, saving, onSave, saveKey,
+}: {
+  label: string; description: string; value: string;
+  onChange: (v: string) => void; saving: string | null; onSave: () => void; saveKey: string;
+}) {
+  return (
+    <div className="space-y-2">
+      <div>
+        <p className="text-sm font-medium text-foreground">{label}</p>
+        <p className="text-xs text-muted-foreground">{description}</p>
+      </div>
+      <div className="flex items-center gap-2">
+        <input type="number" value={value} onChange={e => onChange(e.target.value)} min={0} step={0.5}
+          className="w-28 px-3 py-2 bg-input border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+        <span className="text-sm text-muted-foreground">ชั่วโมง / อาทิตย์</span>
+        <button onClick={onSave} disabled={saving === saveKey}
+          className="px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 disabled:opacity-60 ml-auto shrink-0">
+          {saving === saveKey ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : 'บันทึก'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { can } = usePermissions();
   const canAccess = can('can_access_settings');
 
   const [serverUrl, setServerUrl] = useState('');
   const [requiredHours, setRequiredHours] = useState('');
+  const [requiredOpHours, setRequiredOpHours] = useState('');
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [newName, setNewName] = useState('');
   const [loading, setLoading] = useState(true);
@@ -25,19 +52,30 @@ export default function SettingsPage() {
 
   const load = async () => {
     try {
-      const [url, hrs, docs] = await Promise.all([
+      const [url, hrs, opHrs, docs] = await Promise.all([
         fetchSetting('server_url'),
         fetchSetting('required_hours_per_week'),
+        fetchSetting('required_op_hours_per_week'),
         fetchDoctors(),
       ]);
       setServerUrl(url);
-      setRequiredHours(hrs);
+      setRequiredHours(hrs || '20');
+      setRequiredOpHours(opHrs || '5');
       setDoctors(docs);
     } catch { toast.error('โหลดการตั้งค่าล้มเหลว'); }
     finally { setLoading(false); }
   };
 
   useEffect(() => { load(); }, []);
+
+  const saveSetting = async (key: string, value: string, label: string, saveKey: string) => {
+    const n = Number(value);
+    if (isNaN(n) || n < 0) { toast.error('กรุณากรอกตัวเลขที่ถูกต้อง'); return; }
+    setSaving(saveKey);
+    try { await updateSetting(key, String(n)); toast.success(`บันทึก${label}แล้ว`); }
+    catch { toast.error('บันทึกล้มเหลว'); }
+    finally { setSaving(null); }
+  };
 
   const saveUrl = async () => {
     setSaving('url');
@@ -56,15 +94,6 @@ export default function SettingsPage() {
       else toast.error('เซิร์ฟเวอร์ตอบกลับผิดปกติ');
     } catch { setConnStatus('fail'); toast.error('ไม่สามารถเชื่อมต่อได้'); }
     finally { setTestingConn(false); }
-  };
-
-  const saveHours = async () => {
-    const n = Number(requiredHours);
-    if (isNaN(n) || n < 0) { toast.error('กรุณากรอกตัวเลขที่ถูกต้อง'); return; }
-    setSaving('hrs');
-    try { await updateSetting('required_hours_per_week', String(n)); toast.success('บันทึกเกณฑ์ชั่วโมงแล้ว'); }
-    catch { toast.error('บันทึกล้มเหลว'); }
-    finally { setSaving(null); }
   };
 
   const handleAddDoctor = async () => {
@@ -113,24 +142,38 @@ export default function SettingsPage() {
                 }`}>
                 {testingConn ? <RefreshCw className="w-3 h-3 animate-spin" /> :
                   connStatus === 'ok' ? <Wifi className="w-3 h-3" /> :
-                  connStatus === 'fail' ? <WifiOff className="w-3 h-3" /> :
-                  <Wifi className="w-3 h-3" />}
-                {testingConn ? 'กำลังทดสอบ...' : connStatus === 'ok' ? 'เชื่อมต่อสำเร็จ' : connStatus === 'fail' ? 'เชื่อมต่อล้มเหลว' : 'ทดสอบการเชื่อมต่อ'}
+                  <WifiOff className="w-3 h-3" />}
+                {testingConn ? 'กำลังทดสอบ...' :
+                  connStatus === 'ok' ? 'เชื่อมต่อสำเร็จ' :
+                  connStatus === 'fail' ? 'เชื่อมต่อล้มเหลว' : 'ทดสอบการเชื่อมต่อ'}
               </button>
             </section>
 
-            {/* ชั่วโมงทำงาน */}
-            <section className="bg-card border border-border rounded-lg p-4 space-y-3">
-              <h2 className="font-semibold text-foreground text-sm">⏱ เกณฑ์ชั่วโมงทำงาน</h2>
-              <p className="text-xs text-muted-foreground">กำหนดจำนวนชั่วโมงทำงานขั้นต่ำต่ออาทิตย์</p>
-              <div className="flex items-center gap-2">
-                <input type="number" value={requiredHours} onChange={e => setRequiredHours(e.target.value)} min={0}
-                  className="w-24 px-3 py-2 bg-input border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
-                <span className="text-sm text-muted-foreground">ชั่วโมง / อาทิตย์</span>
-                <button onClick={saveHours} disabled={saving === 'hrs'}
-                  className="px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 disabled:opacity-60 ml-auto shrink-0">
-                  {saving === 'hrs' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : 'บันทึก'}
-                </button>
+            {/* เกณฑ์ชั่วโมง */}
+            <section className="bg-card border border-border rounded-lg p-4 space-y-4">
+              <div>
+                <h2 className="font-semibold text-foreground text-sm">⏱ เกณฑ์ชั่วโมงสำหรับสอบเลื่อนยศ</h2>
+                <p className="text-xs text-muted-foreground mt-1">ใช้เป็นเกณฑ์แสดงในหน้า "คุณสมบัติสอบเลื่อนยศ" — รองรับทศนิยม เช่น 1.5 = 1 ชม. 30 นาที</p>
+              </div>
+              <HoursInput
+                label="ออนไลน์ขั้นต่ำ / อาทิตย์"
+                description="จำนวนชั่วโมง login ทั้งหมด ไม่นับ OP"
+                value={requiredHours}
+                onChange={setRequiredHours}
+                saving={saving}
+                saveKey="hrs"
+                onSave={() => saveSetting('required_hours_per_week', requiredHours, 'ชั่วโมงออนไลน์', 'hrs')}
+              />
+              <div className="border-t border-border pt-4">
+                <HoursInput
+                  label="ทำหน้าที่ OP ขั้นต่ำ / อาทิตย์"
+                  description="จำนวนชั่วโมงที่ขึ้นเป็นคนรัน OP"
+                  value={requiredOpHours}
+                  onChange={setRequiredOpHours}
+                  saving={saving}
+                  saveKey="opHrs"
+                  onSave={() => saveSetting('required_op_hours_per_week', requiredOpHours, 'ชั่วโมง OP', 'opHrs')}
+                />
               </div>
             </section>
 
@@ -142,23 +185,25 @@ export default function SettingsPage() {
                   <input value={newName} onChange={e => setNewName(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && handleAddDoctor()} placeholder="ชื่อหมอใหม่"
                     className="flex-1 min-w-0 px-3 py-2 bg-input border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
-                  <button onClick={handleAddDoctor} className="px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 shrink-0">
+                  <button onClick={handleAddDoctor}
+                    className="px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 shrink-0">
                     <Plus className="w-4 h-4" />
                   </button>
                 </div>
                 <div className="space-y-1.5 max-h-60 overflow-y-auto">
-                  {doctors.length === 0 ? (
-                    <p className="text-center text-xs text-muted-foreground py-3">ยังไม่มีหมอในระบบ</p>
-                  ) : doctors.map(d => (
-                    <div key={d.id} className="flex items-center gap-2 px-3 py-2 bg-muted/30 rounded-md">
-                      <span className="flex-1 text-sm text-foreground min-w-0 truncate">{d.name}</span>
-                      <span className="text-xs text-muted-foreground shrink-0">{d.status}</span>
-                      <button onClick={() => handleRemoveDoctor(d)}
-                        className="p-0.5 text-muted-foreground hover:text-destructive transition-colors shrink-0">
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
+                  {doctors.length === 0
+                    ? <p className="text-center text-xs text-muted-foreground py-3">ยังไม่มีหมอในระบบ</p>
+                    : doctors.map(d => (
+                      <div key={d.id} className="flex items-center gap-2 px-3 py-2 bg-muted/30 rounded-md">
+                        <span className="flex-1 text-sm text-foreground min-w-0 truncate">{d.name}</span>
+                        <span className="text-xs text-muted-foreground shrink-0">{d.status}</span>
+                        <button onClick={() => handleRemoveDoctor(d)}
+                          className="p-0.5 text-muted-foreground hover:text-destructive transition-colors shrink-0">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))
+                  }
                 </div>
               </section>
             )}
