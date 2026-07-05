@@ -7,6 +7,7 @@ import {
   initStore, sha256Hex,
   storeGetUserByUsername, storeGetUsers, hydrateUser,
   storeStartSession, storeEndSession,
+  storeUpdateDoctorStatus,
   subscribeStore,
 } from '@/store/store';
 import type { UserProfile } from '@/types/index';
@@ -89,6 +90,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser({ id: stored.id });
       setProfile(hydrateUser(stored));
       setActiveSessionId(sessionId);
+      // ─── Auto-join คิว OP เมื่อ login ─────────────────────────────────────
+      if (stored.doctor_id) {
+        storeUpdateDoctorStatus(stored.doctor_id, 'op');
+      }
       return { error: null };
     } catch (err) {
       return { error: err as Error };
@@ -96,6 +101,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = () => {
+    // ─── Auto-leave คิว OP เมื่อ logout ────────────────────────────────────
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (raw) {
+      const { userId } = JSON.parse(raw) as LocalSession;
+      const u = storeGetUsers().find(x => x.id === userId);
+      if (u?.doctor_id) storeUpdateDoctorStatus(u.doctor_id, 'off_duty');
+    }
     if (activeSessionId) storeEndSession(activeSessionId);
     localStorage.removeItem(SESSION_KEY);
     setUser(null);

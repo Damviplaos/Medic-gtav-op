@@ -74,28 +74,44 @@ function write<T>(key: string, value: T): void {
 
 // ─── Seed (ถ้ายังไม่เคย init) ────────────────────────────────────────────────
 export async function initStore(): Promise<void> {
-  if (localStorage.getItem(K.SEEDED)) return;
+  // ตรวจจาก roles ที่มีอยู่จริง ไม่ใช่จาก seed-version key
+  // เพื่อป้องกันข้อมูลหายเมื่อ seed key เปลี่ยน version
+  const existingRoles = read<Role[]>(K.ROLES);
+  const isFirstTime = !existingRoles || existingRoles.length === 0;
 
-  // hash passwords
-  const adminHash = await sha256Hex('Admin1234!');
-  const botHash = await sha256Hex('Bot1234!');
+  if (isFirstTime) {
+    // ติดตั้งครั้งแรก — seed ทุกอย่าง
+    const adminHash = await sha256Hex('Admin1234!');
+    const botHash = await sha256Hex('Bot1234!');
 
-  const users: StoredUser[] = SEED_USERS.map(u => ({
-    ...u,
-    password_hash: u.password_hash === '__HASH_superadmin__' ? adminHash
-      : u.password_hash === '__HASH_bot__' ? botHash
-      : u.password_hash,
-  }));
+    const users: StoredUser[] = SEED_USERS.map(u => ({
+      ...u,
+      password_hash: u.password_hash === '__HASH_superadmin__' ? adminHash
+        : u.password_hash === '__HASH_bot__' ? botHash
+        : u.password_hash,
+    }));
 
-  write(K.ROLES, SEED_ROLES);
-  write(K.USERS, users);
-  write(K.DOCTORS, SEED_DOCTORS);
-  write(K.OPERATOR, null);
-  write(K.QUEUE_STATE, SEED_QUEUE_STATE);
-  write(K.SETTINGS, SEED_SETTINGS);
-  write(K.SESSIONS, EMPTY_SESSIONS);
-  write(K.OP_SESSIONS, []);
-  write(K.WARNINGS, EMPTY_WARNINGS);
+    write(K.ROLES, SEED_ROLES);
+    write(K.USERS, users);
+    write(K.DOCTORS, SEED_DOCTORS);
+    write(K.OPERATOR, null);
+    write(K.QUEUE_STATE, SEED_QUEUE_STATE);
+    write(K.SETTINGS, SEED_SETTINGS);
+    write(K.SESSIONS, EMPTY_SESSIONS);
+    write(K.OP_SESSIONS, []);
+    write(K.WARNINGS, EMPTY_WARNINGS);
+  } else {
+    // Additive migration: เพิ่ม key ใหม่โดยไม่ลบของเดิม
+    if (!read(K.OP_SESSIONS)) write(K.OP_SESSIONS, []);
+    if (!read(K.QUEUE_STATE)) write(K.QUEUE_STATE, SEED_QUEUE_STATE);
+    if (!read(K.OPERATOR)) write(K.OPERATOR, null);
+    // Merge settings ใหม่เข้ากับของเดิม (เพิ่ม key ที่ยังไม่มีเท่านั้น)
+    const existing = read<Record<string, string>>(K.SETTINGS) ?? {};
+    const merged: Record<string, string> = { ...SEED_SETTINGS, ...existing };
+    write(K.SETTINGS, merged);
+  }
+
+  // อัปเดต seed flag เสมอ
   localStorage.setItem(K.SEEDED, '1');
 }
 
