@@ -5,10 +5,9 @@ import { Toaster } from '@/components/ui/sonner';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { routes } from './routes';
 
-// Guard: redirect to /login if not authenticated (for protected routes)
 function ProtectedRoute({ element }: { element: React.ReactNode }) {
   const { user, loading } = useAuth();
-  if (loading) return null;
+  if (loading) return <div className="min-h-screen bg-background flex items-center justify-center"><div className="w-7 h-7 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>;
   if (!user) return <Navigate to="/login" replace />;
   return <>{element}</>;
 }
@@ -18,15 +17,11 @@ function AppRoutes() {
     <>
       <IntersectObserver />
       <Routes>
-        {routes.map((route, index) => (
+        {routes.map((route, idx) => (
           <Route
-            key={index}
+            key={idx}
             path={route.path}
-            element={
-              route.public
-                ? route.element
-                : <ProtectedRoute element={route.element} />
-            }
+            element={route.public ? route.element : <ProtectedRoute element={route.element} />}
           />
         ))}
         <Route path="*" element={<Navigate to="/" replace />} />
@@ -35,19 +30,13 @@ function AppRoutes() {
   );
 }
 
-const App: React.FC = () => {
-  return (
-    <Router>
-      <AuthProvider>
-        <div className="flex flex-col min-h-screen">
-          <main className="flex-grow">
-            <AppRoutes />
-          </main>
-        </div>
-        <Toaster position="top-center" richColors />
-      </AuthProvider>
-    </Router>
-  );
-};
+const App: React.FC = () => (
+  <Router>
+    <AuthProvider>
+      <AppRoutes />
+      <Toaster position="top-center" richColors />
+    </AuthProvider>
+  </Router>
+);
 
 export default App;

@@ -1,243 +1,170 @@
-// หน้าตั้งค่า: Server URL + จัดการรายชื่อหมอ
+// หน้าตั้งค่า
 import { useState, useEffect } from 'react';
-import { useAuth } from '@/contexts/AuthContext';
 import {
-  fetchDoctors, addDoctor, removeDoctor,
   fetchSetting, updateSetting,
+  fetchDoctors, addDoctor, removeDoctor,
 } from '@/services/api';
 import type { Doctor } from '@/types/index';
+import { usePermissions } from '@/hooks/use-permissions';
+import AppLayout from '@/components/layouts/AppLayout';
 import { toast } from 'sonner';
-import { Settings, ArrowLeft, Plus, Trash2, Link, Save, RefreshCw } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { Settings, Plus, Trash2, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 
 export default function SettingsPage() {
-  const { user, signOut } = useAuth();
-  const navigate = useNavigate();
+  const { can } = usePermissions();
+  const canAccess = can('can_access_settings');
+
+  const [serverUrl, setServerUrl] = useState('');
+  const [requiredHours, setRequiredHours] = useState('');
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [newName, setNewName] = useState('');
-  const [serverUrl, setServerUrl] = useState('');
-  const [savingUrl, setSavingUrl] = useState(false);
-  const [addingDoctor, setAddingDoctor] = useState(false);
-  const [testResult, setTestResult] = useState<'idle' | 'loading' | 'ok' | 'fail'>('idle');
+  const [loading, setLoading] = useState(true);
+  const [testingConn, setTestingConn] = useState(false);
+  const [connStatus, setConnStatus] = useState<'idle' | 'ok' | 'fail'>('idle');
+  const [saving, setSaving] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchDoctors().then(setDoctors).catch(() => toast.error('โหลดข้อมูลล้มเหลว'));
-    fetchSetting('server_url').then(setServerUrl).catch(() => {});
-  }, []);
+  const load = async () => {
+    try {
+      const [url, hrs, docs] = await Promise.all([
+        fetchSetting('server_url'),
+        fetchSetting('required_hours_per_week'),
+        fetchDoctors(),
+      ]);
+      setServerUrl(url);
+      setRequiredHours(hrs);
+      setDoctors(docs);
+    } catch { toast.error('โหลดการตั้งค่าล้มเหลว'); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const saveUrl = async () => {
+    setSaving('url');
+    try { await updateSetting('server_url', serverUrl); toast.success('บันทึก Server URL แล้ว'); }
+    catch { toast.error('บันทึกล้มเหลว'); }
+    finally { setSaving(null); }
+  };
+
+  const testConn = async () => {
+    if (!serverUrl.trim()) { toast.error('กรุณากรอก Server URL ก่อน'); return; }
+    setTestingConn(true); setConnStatus('idle');
+    try {
+      const res = await fetch(`${serverUrl.trim()}/players.json`, { signal: AbortSignal.timeout(5000) });
+      setConnStatus(res.ok ? 'ok' : 'fail');
+      if (res.ok) toast.success('เชื่อมต่อสำเร็จ');
+      else toast.error('เซิร์ฟเวอร์ตอบกลับผิดปกติ');
+    } catch { setConnStatus('fail'); toast.error('ไม่สามารถเชื่อมต่อได้'); }
+    finally { setTestingConn(false); }
+  };
+
+  const saveHours = async () => {
+    const n = Number(requiredHours);
+    if (isNaN(n) || n < 0) { toast.error('กรุณากรอกตัวเลขที่ถูกต้อง'); return; }
+    setSaving('hrs');
+    try { await updateSetting('required_hours_per_week', String(n)); toast.success('บันทึกเกณฑ์ชั่วโมงแล้ว'); }
+    catch { toast.error('บันทึกล้มเหลว'); }
+    finally { setSaving(null); }
+  };
 
   const handleAddDoctor = async () => {
     if (!newName.trim()) return;
-    setAddingDoctor(true);
-    try {
-      await addDoctor(newName.trim());
-      toast.success(`เพิ่มหมอ "${newName.trim()}" สำเร็จ`);
-      setNewName('');
-      const updated = await fetchDoctors();
-      setDoctors(updated);
-    } catch (err: unknown) {
-      toast.error((err as Error).message || 'เพิ่มหมอล้มเหลว');
-    } finally {
-      setAddingDoctor(false);
-    }
+    try { await addDoctor(newName.trim()); setNewName(''); toast.success('เพิ่มหมอสำเร็จ'); load(); }
+    catch (err) { toast.error((err as Error).message); }
   };
 
   const handleRemoveDoctor = async (doc: Doctor) => {
-    try {
-      await removeDoctor(doc.id);
-      toast.success(`ลบหมอ "${doc.name}" แล้ว`);
-      setDoctors(prev => prev.filter(d => d.id !== doc.id));
-    } catch {
-      toast.error('ลบหมอล้มเหลว');
-    }
+    if (!confirm(`ลบ "${doc.name}" ออกจากระบบ?`)) return;
+    try { await removeDoctor(doc.id); toast.success('ลบหมอแล้ว'); load(); }
+    catch (err) { toast.error((err as Error).message); }
   };
 
-  const handleSaveUrl = async () => {
-    setSavingUrl(true);
-    try {
-      await updateSetting('server_url', serverUrl.trim());
-      toast.success('บันทึก Server URL แล้ว');
-    } catch {
-      toast.error('บันทึกล้มเหลว');
-    } finally {
-      setSavingUrl(false);
-    }
-  };
-
-  const handleTestConnection = async () => {
-    if (!serverUrl.trim()) {
-      toast.error('กรุณากรอก Server URL ก่อน');
-      return;
-    }
-    setTestResult('loading');
-    try {
-      // FiveM server info endpoint
-      const url = serverUrl.trim().replace(/\/$/, '');
-      const res = await fetch(`${url}/info.json`, { signal: AbortSignal.timeout(5000) });
-      if (res.ok) {
-        setTestResult('ok');
-        toast.success('เชื่อมต่อ Server สำเร็จ!');
-      } else {
-        setTestResult('fail');
-        toast.error(`เชื่อมต่อล้มเหลว: HTTP ${res.status}`);
-      }
-    } catch {
-      setTestResult('fail');
-      toast.error('ไม่สามารถเชื่อมต่อได้ กรุณาตรวจสอบ URL');
-    }
-  };
+  if (!canAccess) return (
+    <AppLayout><div className="flex items-center justify-center h-64 text-muted-foreground">ไม่มีสิทธิ์เข้าถึง</div></AppLayout>
+  );
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="sticky top-0 z-10 bg-card border-b border-border px-4 py-3 flex items-center gap-3">
-        <button
-          onClick={() => navigate('/')}
-          className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="w-5 h-5" />
-        </button>
-        <Settings className="w-5 h-5 text-primary" />
-        <h1 className="text-base font-bold text-foreground flex-1 min-w-0">ตั้งค่าระบบ</h1>
-        {user && (
-          <button
-            onClick={() => { signOut(); navigate('/login'); }}
-            className="text-xs text-muted-foreground hover:text-destructive transition-colors px-2 py-1"
-          >
-            ออกจากระบบ
-          </button>
-        )}
-      </header>
+    <AppLayout>
+      <div className="max-w-xl mx-auto p-4 space-y-6">
+        <div className="flex items-center gap-2">
+          <Settings className="w-5 h-5 text-primary" />
+          <h1 className="text-lg font-bold text-foreground">ตั้งค่าระบบ</h1>
+        </div>
 
-      <div className="max-w-lg mx-auto p-4 space-y-6">
-        {/* Server URL */}
-        <section className="bg-card border border-border rounded-lg p-4 space-y-3">
-          <div className="flex items-center gap-2 mb-1">
-            <Link className="w-4 h-4 text-primary" />
-            <h2 className="text-sm font-semibold text-foreground">FiveM Server URL</h2>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            ใส่ URL ของ server เช่น <span className="text-primary font-mono">http://1.2.3.4:30120</span>
-          </p>
-          <input
-            type="url"
-            value={serverUrl}
-            onChange={(e) => { setServerUrl(e.target.value); setTestResult('idle'); }}
-            placeholder="http://server-ip:30120"
-            className="w-full px-3 py-2 bg-input border border-border rounded-md text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring text-sm font-mono"
-          />
-          <div className="flex gap-2">
-            <button
-              onClick={handleSaveUrl}
-              disabled={savingUrl}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 disabled:opacity-60 transition-opacity"
-            >
-              {savingUrl ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-              บันทึก
-            </button>
-            <button
-              onClick={handleTestConnection}
-              disabled={testResult === 'loading'}
-              className="flex items-center gap-1.5 px-3 py-1.5 border border-border text-foreground rounded-md text-sm font-medium hover:bg-muted disabled:opacity-60 transition-colors"
-            >
-              {testResult === 'loading'
-                ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                : <RefreshCw className="w-3.5 h-3.5" />
-              }
-              ทดสอบ
-            </button>
-            {testResult === 'ok' && (
-              <span className="flex items-center gap-1 text-xs text-primary font-medium ml-1">
-                <span className="w-2 h-2 rounded-full bg-primary inline-block" />
-                เชื่อมต่อได้
-              </span>
-            )}
-            {testResult === 'fail' && (
-              <span className="flex items-center gap-1 text-xs text-destructive font-medium ml-1">
-                <span className="w-2 h-2 rounded-full bg-destructive inline-block" />
-                เชื่อมต่อไม่ได้
-              </span>
-            )}
-          </div>
-        </section>
+        {loading ? <div className="flex justify-center py-12"><RefreshCw className="w-7 h-7 text-primary animate-spin" /></div> : (
+          <>
+            {/* Server URL */}
+            <section className="bg-card border border-border rounded-lg p-4 space-y-3">
+              <h2 className="font-semibold text-foreground text-sm">🌐 Server URL (FiveM)</h2>
+              <div className="flex gap-2">
+                <input value={serverUrl} onChange={e => setServerUrl(e.target.value)}
+                  placeholder="http://your-server-ip:port"
+                  className="flex-1 min-w-0 px-3 py-2 bg-input border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+                <button onClick={saveUrl} disabled={saving === 'url'}
+                  className="px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 disabled:opacity-60 shrink-0">
+                  {saving === 'url' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : 'บันทึก'}
+                </button>
+              </div>
+              <button onClick={testConn} disabled={testingConn}
+                className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border transition-colors ${
+                  connStatus === 'ok' ? 'border-primary text-primary' :
+                  connStatus === 'fail' ? 'border-destructive text-destructive' :
+                  'border-border text-muted-foreground hover:text-foreground hover:bg-muted'
+                }`}>
+                {testingConn ? <RefreshCw className="w-3 h-3 animate-spin" /> :
+                  connStatus === 'ok' ? <Wifi className="w-3 h-3" /> :
+                  connStatus === 'fail' ? <WifiOff className="w-3 h-3" /> :
+                  <Wifi className="w-3 h-3" />}
+                {testingConn ? 'กำลังทดสอบ...' : connStatus === 'ok' ? 'เชื่อมต่อสำเร็จ' : connStatus === 'fail' ? 'เชื่อมต่อล้มเหลว' : 'ทดสอบการเชื่อมต่อ'}
+              </button>
+            </section>
 
-        {/* จัดการรายชื่อหมอ */}
-        <section className="bg-card border border-border rounded-lg p-4 space-y-3">
-          <h2 className="text-sm font-semibold text-foreground">จัดการรายชื่อหมอ</h2>
+            {/* ชั่วโมงทำงาน */}
+            <section className="bg-card border border-border rounded-lg p-4 space-y-3">
+              <h2 className="font-semibold text-foreground text-sm">⏱ เกณฑ์ชั่วโมงทำงาน</h2>
+              <p className="text-xs text-muted-foreground">กำหนดจำนวนชั่วโมงทำงานขั้นต่ำต่ออาทิตย์</p>
+              <div className="flex items-center gap-2">
+                <input type="number" value={requiredHours} onChange={e => setRequiredHours(e.target.value)} min={0}
+                  className="w-24 px-3 py-2 bg-input border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+                <span className="text-sm text-muted-foreground">ชั่วโมง / อาทิตย์</span>
+                <button onClick={saveHours} disabled={saving === 'hrs'}
+                  className="px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 disabled:opacity-60 ml-auto shrink-0">
+                  {saving === 'hrs' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : 'บันทึก'}
+                </button>
+              </div>
+            </section>
 
-          {/* เพิ่มหมอ */}
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleAddDoctor()}
-              placeholder="ชื่อหมอ (ตัวละครในเกม)"
-              className="flex-1 min-w-0 px-3 py-2 bg-input border border-border rounded-md text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring text-sm"
-            />
-            <button
-              onClick={handleAddDoctor}
-              disabled={addingDoctor || !newName.trim()}
-              className="flex items-center gap-1.5 px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity shrink-0"
-            >
-              {addingDoctor
-                ? <RefreshCw className="w-4 h-4 animate-spin" />
-                : <Plus className="w-4 h-4" />
-              }
-              เพิ่ม
-            </button>
-          </div>
-
-          {/* รายชื่อหมอ */}
-          {doctors.length === 0 ? (
-            <p className="text-center text-muted-foreground text-sm py-4">ยังไม่มีหมอในระบบ</p>
-          ) : (
-            <div className="space-y-1.5 max-h-80 overflow-y-auto">
-              {doctors.map((doc) => (
-                <div
-                  key={doc.id}
-                  className="flex items-center gap-2 px-3 py-2 bg-muted/50 rounded-md"
-                >
-                  <span
-                    className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                      doc.status === 'op' ? 'status-dot-op' :
-                      doc.status === 'activity' ? 'status-dot-activity' :
-                      doc.status === 'afk' ? 'status-dot-afk' :
-                      doc.status === 'story' ? 'status-dot-story' :
-                      'status-dot-off'
-                    }`}
-                  />
-                  <span className="flex-1 min-w-0 text-sm text-foreground truncate">{doc.name}</span>
-                  <span className="text-xs text-muted-foreground shrink-0">
-                    {doc.status === 'op' ? 'คิว OP' :
-                     doc.status === 'activity' ? 'กิจกรรม' :
-                     doc.status === 'afk' ? 'เหม่อ' :
-                     doc.status === 'story' ? 'ไป Story' : 'ออกเวร'}
-                  </span>
-                  <button
-                    onClick={() => handleRemoveDoctor(doc)}
-                    className="p-1 text-muted-foreground hover:text-destructive transition-colors shrink-0"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
+            {/* จัดการหมอ */}
+            {can('can_manage_doctors') && (
+              <section className="bg-card border border-border rounded-lg p-4 space-y-3">
+                <h2 className="font-semibold text-foreground text-sm">👨‍⚕️ จัดการรายชื่อหมอ (โหมด Manual)</h2>
+                <div className="flex gap-2">
+                  <input value={newName} onChange={e => setNewName(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleAddDoctor()} placeholder="ชื่อหมอใหม่"
+                    className="flex-1 min-w-0 px-3 py-2 bg-input border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+                  <button onClick={handleAddDoctor} className="px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 shrink-0">
+                    <Plus className="w-4 h-4" />
                   </button>
                 </div>
-              ))}
-            </div>
-          )}
-          <p className="text-xs text-muted-foreground">รวม {doctors.length} คน</p>
-        </section>
-
-        {/* ข้อมูล user */}
-        {user && (
-          <section className="bg-card border border-border rounded-lg p-4">
-            <p className="text-xs text-muted-foreground">
-              เข้าสู่ระบบในฐานะ{' '}
-              <span className="text-foreground font-medium">
-                {user.email?.replace('@gtav-queue.app', '')}
-              </span>
-            </p>
-          </section>
+                <div className="space-y-1.5 max-h-60 overflow-y-auto">
+                  {doctors.length === 0 ? (
+                    <p className="text-center text-xs text-muted-foreground py-3">ยังไม่มีหมอในระบบ</p>
+                  ) : doctors.map(d => (
+                    <div key={d.id} className="flex items-center gap-2 px-3 py-2 bg-muted/30 rounded-md">
+                      <span className="flex-1 text-sm text-foreground min-w-0 truncate">{d.name}</span>
+                      <span className="text-xs text-muted-foreground shrink-0">{d.status}</span>
+                      <button onClick={() => handleRemoveDoctor(d)}
+                        className="p-0.5 text-muted-foreground hover:text-destructive transition-colors shrink-0">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+          </>
         )}
       </div>
-    </div>
+    </AppLayout>
   );
 }
