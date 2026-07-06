@@ -1,9 +1,9 @@
 // บริการ API สำหรับระบบจัดคิวหมอ — ใช้ localStorage store แทน Supabase
-import type { Doctor, DoctorStatus, Operator, QueueState, Role, UserProfile, WorkSession, Warning, Permission } from '@/types/index';
+import type { Doctor, DoctorStatus, Operator, QueueState, Role, UserProfile, WorkSession, Warning, Permission, WarningSeverity } from '@/types/index';
 import {
   storeGetRoles, storeCreateRole, storeUpdateRole, storeDeleteRole,
   storeGetUsers, storeCreateUser, storeUpdateUserDisplayName,
-  storeUpdateUserRole, storeUpdateUserPassword, storeDeleteUser, hydrateUser,
+  storeUpdateUserRoles, storeUpdateUserRole, storeUpdateUserPassword, storeDeleteUser, hydrateUser,
   storeGetDoctors, storeAddDoctor, storeRemoveDoctor,
   storeUpdateDoctorStatus, storeReturnDoctorToOp,
   storeGetOperator, storeSetOperator, storeClearOperator,
@@ -49,7 +49,7 @@ export async function fetchProfile(userId: string): Promise<UserProfile | null> 
 
 export async function createUserAccount(params: {
   username: string; password: string; displayName: string;
-  roleId: string; doctorId?: string | null; createdBy: string;
+  roleIds: string[]; doctorId?: string | null; createdBy: string;
 }): Promise<void> {
   await storeCreateUser(params);
 }
@@ -58,6 +58,11 @@ export async function updateProfileDisplayName(userId: string, displayName: stri
   storeUpdateUserDisplayName(userId, displayName);
 }
 
+export async function updateProfileRoles(userId: string, roleIds: string[]): Promise<void> {
+  storeUpdateUserRoles(userId, roleIds);
+}
+
+/** @deprecated ใช้ updateProfileRoles แทน */
 export async function updateProfileRole(userId: string, roleId: string): Promise<void> {
   storeUpdateUserRole(userId, roleId);
 }
@@ -161,6 +166,6 @@ export async function fetchMyWarnings(userId: string): Promise<Warning[]> {
   return storeGetMyWarnings(userId);
 }
 
-export async function issueWarning(issuedTo: string, issuedBy: string, reason: string): Promise<void> {
-  storeIssueWarning(issuedTo, issuedBy, reason);
+export async function issueWarning(issuedTo: string, issuedBy: string, reason: string, severity: WarningSeverity = 'yellow'): Promise<void> {
+  storeIssueWarning(issuedTo, issuedBy, reason, severity);
 }

@@ -28,14 +28,19 @@ export interface UserProfile {
   id: string;
   username: string;
   display_name: string;
+  /** ยศหลัก (แรกสุดในรายการ) ใช้สีและชื่อ */
   role_id: string;
+  /** รายการยศทั้งหมด (แบบ Discord — หลายยศได้) */
+  role_ids: string[];
   doctor_id: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
   // joined
-  role?: Role;
+  role?: Role;           // primary role (สำหรับสีและชื่อ)
+  roles?: Role[];        // ยศทั้งหมดที่ user มี
   doctor?: Doctor | null;
+  is_superadmin?: boolean; // ป้องกันไม่ให้ใครเปลี่ยนได้
 }
 
 // ─── Work Session ─────────────────────────────────────────────────────────────
@@ -51,11 +56,14 @@ export interface WorkSession {
 }
 
 // ─── Warning ──────────────────────────────────────────────────────────────────
+export type WarningSeverity = 'yellow' | 'orange' | 'red';
+
 export interface Warning {
   id: string;
   issued_to: string;
   issued_by: string;
   reason: string;
+  severity: WarningSeverity; // สีใบเตือน
   created_at: string;
   // joined
   issued_to_profile?: UserProfile;

@@ -166,7 +166,7 @@ export function storeUpdateRole(id: string, params: {
 
 export function storeDeleteRole(id: string): void {
   const users = storeGetUsers();
-  if (users.find(u => u.role_id === id)) throw new Error('ไม่สามารถลบยศที่มีผู้ใช้งานอยู่ได้');
+  if (users.find(u => (u.role_ids ?? [u.role_id]).includes(id))) throw new Error('ไม่สามารถลบยศที่มีผู้ใช้งานอยู่ได้');
   write(K.ROLES, storeGetRoles().filter(r => r.id !== id));
   broadcast();
 }
@@ -188,17 +188,19 @@ export function storeGetUserByUsername(username: string): StoredUser | null {
 
 export async function storeCreateUser(params: {
   username: string; password: string; displayName: string;
-  roleId: string; doctorId?: string | null; createdBy: string;
+  roleIds: string[]; doctorId?: string | null; createdBy: string;
 }): Promise<void> {
   if (storeGetUserByUsername(params.username)) throw new Error('ชื่อผู้ใช้นี้ถูกใช้งานแล้ว');
   const hash = await sha256Hex(params.password);
   const now = new Date().toISOString();
+  const primaryRole = params.roleIds[0] ?? '';
   const newUser: StoredUser = {
     id: crypto.randomUUID(),
     username: params.username.trim(),
     display_name: params.displayName.trim(),
     password_hash: hash,
-    role_id: params.roleId,
+    role_id: primaryRole,
+    role_ids: params.roleIds,
     doctor_id: params.doctorId ?? null,
     created_by: params.createdBy,
     created_at: now,
@@ -215,11 +217,24 @@ export function storeUpdateUserDisplayName(userId: string, displayName: string):
   broadcast();
 }
 
-export function storeUpdateUserRole(userId: string, roleId: string): void {
+export function storeUpdateUserRoles(userId: string, roleIds: string[]): void {
+  if (!roleIds.length) throw new Error('ต้องมีอย่างน้อย 1 ยศ');
+  const target = storeGetUsers().find(u => u.id === userId);
+  if (target?.username === 'superadmin') throw new Error('ไม่สามารถเปลี่ยนยศ Super Admin ได้');
   write(K.USERS, storeGetUsers().map(u =>
-    u.id === userId ? { ...u, role_id: roleId, updated_at: new Date().toISOString() } : u
+    u.id === userId ? {
+      ...u,
+      role_id: roleIds[0],
+      role_ids: roleIds,
+      updated_at: new Date().toISOString(),
+    } : u
   ));
   broadcast();
+}
+
+/** @deprecated ใช้ storeUpdateUserRoles แทน */
+export function storeUpdateUserRole(userId: string, roleId: string): void {
+  storeUpdateUserRoles(userId, [roleId]);
 }
 
 export async function storeUpdateUserPassword(userId: string, newPassword: string): Promise<void> {
@@ -235,23 +250,29 @@ export function storeDeleteUser(userId: string): void {
   broadcast();
 }
 
-/** รวม role ลงใน UserProfile object */
+/** รวม roles ลงใน UserProfile object (รองรับหลายยศแบบ Discord) */
 export function hydrateUser(u: StoredUser): import('@/types/index').UserProfile {
-  const roles = storeGetRoles();
-  const role = roles.find(r => r.id === u.role_id);
+  const allRoles = storeGetRoles();
+  // Backward-compat: ถ้า role_ids ยังไม่มี ให้ใช้ role_id เดิม
+  const ids: string[] = u.role_ids?.length ? u.role_ids : (u.role_id ? [u.role_id] : []);
+  const roles = ids.map(id => allRoles.find(r => r.id === id)).filter(Boolean) as import('@/types/index').Role[];
+  const primaryRole = roles[0];
   const docs = storeGetDoctors();
   const doctor = u.doctor_id ? docs.find(d => d.id === u.doctor_id) ?? null : null;
   return {
     id: u.id,
     username: u.username,
     display_name: u.display_name,
-    role_id: u.role_id,
+    role_id: primaryRole?.id ?? u.role_id,
+    role_ids: ids,
     doctor_id: u.doctor_id,
     created_by: u.created_by,
     created_at: u.created_at,
     updated_at: u.updated_at,
-    role,
+    role: primaryRole,
+    roles,
     doctor,
+    is_superadmin: u.username === 'superadmin',
   };
 }
 
@@ -448,13 +469,14 @@ export function storeGetWarnings(): Warning[] {
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
-export function storeIssueWarning(issuedTo: string, issuedBy: string, reason: string): void {
+export function storeIssueWarning(issuedTo: string, issuedBy: string, reason: string, severity: import('@/types/index').WarningSeverity = 'yellow'): void {
   const warnings = storeGetWarnings();
   write(K.WARNINGS, [{
     id: crypto.randomUUID(),
     issued_to: issuedTo,
     issued_by: issuedBy,
     reason,
+    severity,
     created_at: new Date().toISOString(),
   }, ...warnings]);
   broadcast();
@@ -465,8 +487,9 @@ export function storeGetWarningsWithProfiles(): Warning[] {
   const users = storeGetUsers();
   return warnings.map(w => ({
     ...w,
-    issued_to_profile: users.find(u => u.id === w.issued_to),
-    issued_by_profile: users.find(u => u.id === w.issued_by),
+    severity: w.severity ?? 'yellow', // backward compat
+    issued_to_profile: (() => { const u = users.find(x => x.id === w.issued_to); return u ? hydrateUser(u) : undefined; })(),
+    issued_by_profile: (() => { const u = users.find(x => x.id === w.issued_by); return u ? hydrateUser(u) : undefined; })(),
   }));
 }
 
@@ -476,8 +499,9 @@ export function storeGetMyWarnings(userId: string): Warning[] {
     .filter(w => w.issued_to === userId)
     .map(w => ({
       ...w,
-      issued_to_profile: users.find(u => u.id === w.issued_to),
-      issued_by_profile: users.find(u => u.id === w.issued_by),
+      severity: w.severity ?? 'yellow',
+      issued_to_profile: (() => { const u = users.find(x => x.id === w.issued_to); return u ? hydrateUser(u) : undefined; })(),
+      issued_by_profile: (() => { const u = users.find(x => x.id === w.issued_by); return u ? hydrateUser(u) : undefined; })(),
     }))
     .slice(0, 100);
 }

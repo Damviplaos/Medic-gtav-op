@@ -30,3 +30,10 @@ package.json.[0-9]*
 .sync
 history/*.json
 .vite_cache
+/.skills
+/tasks
+
+# Sensitive / platform files
+.env
+.env.*
+historical_context.txt

@@ -10,7 +10,10 @@ export interface StoredUser {
   username: string;
   display_name: string;
   password_hash: string; // SHA-256 hex
+  /** ยศหลัก (สำหรับ backward compat + primary display) */
   role_id: string;
+  /** รายการยศทั้งหมด (แบบ Discord หลายยศ) */
+  role_ids: string[];
   doctor_id: string | null;
   created_by: string | null;
   created_at: string;
@@ -141,9 +144,9 @@ export const SEED_USERS: StoredUser[] = [
     id: SEED_IDS.USER_SUPERADMIN,
     username: 'superadmin',
     display_name: 'Super Admin',
-    // SHA-256("Admin1234!") computed at build time
     password_hash: '__HASH_superadmin__',
     role_id: SEED_IDS.ROLE_ADMIN,
+    role_ids: [SEED_IDS.ROLE_ADMIN],
     doctor_id: null,
     created_by: null,
     created_at: '2025-01-01T00:00:00.000Z',
@@ -155,6 +158,7 @@ export const SEED_USERS: StoredUser[] = [
     display_name: 'บอท หมอไนท์',
     password_hash: '__HASH_bot__',
     role_id: SEED_IDS.ROLE_DOCTOR,
+    role_ids: [SEED_IDS.ROLE_DOCTOR],
     doctor_id: SEED_IDS.DOC_BOT1,
     created_by: SEED_IDS.USER_SUPERADMIN,
     created_at: '2025-01-01T00:01:00.000Z',
@@ -166,6 +170,7 @@ export const SEED_USERS: StoredUser[] = [
     display_name: 'บอท หมอซุปเปอร์',
     password_hash: '__HASH_bot__',
     role_id: SEED_IDS.ROLE_DOCTOR,
+    role_ids: [SEED_IDS.ROLE_DOCTOR],
     doctor_id: SEED_IDS.DOC_BOT2,
     created_by: SEED_IDS.USER_SUPERADMIN,
     created_at: '2025-01-01T00:02:00.000Z',
@@ -177,6 +182,7 @@ export const SEED_USERS: StoredUser[] = [
     display_name: 'บอท หมอโค้ก',
     password_hash: '__HASH_bot__',
     role_id: SEED_IDS.ROLE_DOCTOR,
+    role_ids: [SEED_IDS.ROLE_DOCTOR],
     doctor_id: SEED_IDS.DOC_BOT3,
     created_by: SEED_IDS.USER_SUPERADMIN,
     created_at: '2025-01-01T00:03:00.000Z',

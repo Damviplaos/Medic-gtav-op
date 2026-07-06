@@ -91,9 +91,16 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-sidebar-foreground truncate">{profile.display_name}</p>
-              <p className="text-xs truncate" style={{ color: profile.role?.color ?? '#6B7280' }}>
-                {profile.role?.name ?? ''}
-              </p>
+              {/* แสดงยศทั้งหมด (แบบ Discord) */}
+              <div className="flex flex-wrap gap-0.5 mt-0.5">
+                {(profile.roles?.length ? profile.roles : (profile.role ? [profile.role] : [])).map(r => (
+                  <span key={r.id} className="text-[10px] font-medium" style={{ color: r.color }}>{r.name}</span>
+                )).reduce((acc: React.ReactNode[], el, i, arr) => {
+                  acc.push(el);
+                  if (i < arr.length - 1) acc.push(<span key={`sep-${i}`} className="text-muted-foreground text-[10px]">/</span>);
+                  return acc;
+                }, [])}
+              </div>
             </div>
           </div>
         </div>
@@ -173,6 +180,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <div
               className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-xs font-bold text-white"
               style={{ backgroundColor: profile.role?.color ?? '#6B7280' }}
+              title={(profile.roles?.length ? profile.roles : (profile.role ? [profile.role] : [])).map(r => r.name).join(' / ')}
             >
               {profile.display_name.charAt(0).toUpperCase()}
             </div>

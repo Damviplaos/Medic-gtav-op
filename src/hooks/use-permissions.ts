@@ -1,18 +1,21 @@
-// Hook สำหรับตรวจสิทธิ์ผู้ใช้งาน
+// Hook สำหรับตรวจสิทธิ์ผู้ใช้งาน (รองรับหลายยศแบบ Discord)
 import { useAuth } from '@/contexts/AuthContext';
 import type { Permission } from '@/types/index';
 
 export function usePermissions() {
   const { profile } = useAuth();
-  const role = profile?.role;
+  const roles = profile?.roles ?? (profile?.role ? [profile.role] : []);
 
+  // คืน true ถ้ายศใดยศหนึ่งมีสิทธิ์นั้น
   const can = (permission: Permission): boolean => {
-    if (!role) return false;
-    return !!role[permission];
+    if (!roles.length) return false;
+    return roles.some(r => !!r[permission]);
   };
 
-  const isAdmin = role?.name === 'admin';
-  const isDirector = role?.name === 'ผอ' || isAdmin;
+  const isAdmin = roles.some(r => r.name === 'admin') || !!profile?.is_superadmin;
+  const isDirector = roles.some(r => r.name === 'ผอ') || isAdmin;
+  // ยศหลักสำหรับ display
+  const role = roles[0];
 
-  return { can, isAdmin, isDirector, role };
+  return { can, isAdmin, isDirector, role, roles };
 }
