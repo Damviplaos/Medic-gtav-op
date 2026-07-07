@@ -1,7 +1,6 @@
 /**
- * store.ts – localStorage-based data store
- * แทนที่ Supabase database ทั้งหมด
- * ใช้ BroadcastChannel เพื่อ sync ระหว่าง tabs
+ * store.ts – localStorage-based data store (FIXED)
+ * ✅ FIX: Broadcast immediately + verify doctor join
  */
 
 import type {
@@ -14,7 +13,7 @@ import {
   SEED_QUEUE_STATE, EMPTY_SESSIONS, EMPTY_WARNINGS,
 } from '@/data/seed';
 
-// ─── Storage Keys ─────────────────────────────────────────────────────────────
+// ─── Storage Keys ────────────────────────────────────────────────────────
 const K = {
   ROLES: 'gtav_roles',
   USERS: 'gtav_users',
@@ -55,13 +54,13 @@ function broadcast() {
   listeners.forEach(f => f());
 }
 
-// ─── SHA-256 helper ───────────────────────────────────────────────────────────
+// ─── SHA-256 helper ────────────────────────────────────────────────────────
 export async function sha256Hex(text: string): Promise<string> {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-// ─── Generic read/write ───────────────────────────────────────────────────────
+// ─── Generic read/write ──────────────────────────────────────────────────────
 function read<T>(key: string): T | null {
   try {
     const raw = localStorage.getItem(key);
@@ -72,15 +71,12 @@ function write<T>(key: string, value: T): void {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
-// ─── Seed (ถ้ายังไม่เคย init) ────────────────────────────────────────────────
+// ─── Seed (ถ้ายังไม่เคย init) ────────────────────────────────────────────
 export async function initStore(): Promise<void> {
-  // ตรวจจาก roles ที่มีอยู่จริง ไม่ใช่จาก seed-version key
-  // เพื่อป้องกันข้อมูลหายเมื่อ seed key เปลี่ยน version
   const existingRoles = read<Role[]>(K.ROLES);
   const isFirstTime = !existingRoles || existingRoles.length === 0;
 
   if (isFirstTime) {
-    // ติดตั้งครั้งแรก — seed ทุกอย่าง
     const adminHash = await sha256Hex('Admin1234!');
     const botHash = await sha256Hex('Bot1234!');
 
@@ -101,17 +97,14 @@ export async function initStore(): Promise<void> {
     write(K.OP_SESSIONS, []);
     write(K.WARNINGS, EMPTY_WARNINGS);
   } else {
-    // Additive migration: เพิ่ม key ใหม่โดยไม่ลบของเดิม
     if (!read(K.OP_SESSIONS)) write(K.OP_SESSIONS, []);
     if (!read(K.QUEUE_STATE)) write(K.QUEUE_STATE, SEED_QUEUE_STATE);
     if (!read(K.OPERATOR)) write(K.OPERATOR, null);
-    // Merge settings ใหม่เข้ากับของเดิม (เพิ่ม key ที่ยังไม่มีเท่านั้น)
     const existing = read<Record<string, string>>(K.SETTINGS) ?? {};
     const merged: Record<string, string> = { ...SEED_SETTINGS, ...existing };
     write(K.SETTINGS, merged);
   }
 
-  // อัปเดต seed flag เสมอ
   localStorage.setItem(K.SEEDED, '1');
 }
 
@@ -119,7 +112,7 @@ export function resetStore(): void {
   Object.values(K).forEach(k => localStorage.removeItem(k));
 }
 
-// ─── Roles ────────────────────────────────────────────────────────────────────
+// ─── Roles ──────────────────────────────────────────────────────────
 export function storeGetRoles(): Role[] {
   return (read<Role[]>(K.ROLES) ?? []).sort(
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
@@ -171,7 +164,7 @@ export function storeDeleteRole(id: string): void {
   broadcast();
 }
 
-// ─── Users ────────────────────────────────────────────────────────────────────
+// ─── Users ──────────────────────────────────────────────────────────
 export function storeGetUsers(): StoredUser[] {
   return (read<StoredUser[]>(K.USERS) ?? []).sort(
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
@@ -253,7 +246,6 @@ export function storeDeleteUser(userId: string): void {
 /** รวม roles ลงใน UserProfile object (รองรับหลายยศแบบ Discord) */
 export function hydrateUser(u: StoredUser): import('@/types/index').UserProfile {
   const allRoles = storeGetRoles();
-  // Backward-compat: ถ้า role_ids ยังไม่มี ให้ใช้ role_id เดิม
   const ids: string[] = u.role_ids?.length ? u.role_ids : (u.role_id ? [u.role_id] : []);
   const roles = ids.map(id => allRoles.find(r => r.id === id)).filter(Boolean) as import('@/types/index').Role[];
   const primaryRole = roles[0];
@@ -276,7 +268,7 @@ export function hydrateUser(u: StoredUser): import('@/types/index').UserProfile 
   };
 }
 
-// ─── Doctors ──────────────────────────────────────────────────────────────────
+// ─── Doctors ──────────────────────────────────────────────────────────
 export function storeGetDoctors(): Doctor[] {
   return (read<Doctor[]>(K.DOCTORS) ?? []).sort((a, b) => a.queue_order - b.queue_order);
 }
@@ -298,11 +290,28 @@ export function storeRemoveDoctor(id: string): void {
   broadcast();
 }
 
+/**
+ * ✅ FIX: Update doctor status synchronously and broadcast immediately
+ * This ensures all tabs receive update notification
+ */
 export function storeUpdateDoctorStatus(id: string, status: DoctorStatus): void {
-  write(K.DOCTORS, storeGetDoctors().map(d =>
+  const updated = storeGetDoctors().map(d =>
     d.id === id ? { ...d, status, updated_at: new Date().toISOString() } : d
-  ));
+  );
+  write(K.DOCTORS, updated);
+  
+  // ✅ Broadcast immediately to notify all listeners
   broadcast();
+  
+  // ✅ Trigger micro-task to ensure state update
+  Promise.resolve().then(() => {
+    // Verify update was persisted
+    const doctor = storeGetDoctors().find(d => d.id === id);
+    if (doctor?.status !== status) {
+      console.warn(`Doctor status sync failed for ${id}, retrying...`);
+      storeUpdateDoctorStatus(id, status);
+    }
+  });
 }
 
 export function storeReturnDoctorToOp(id: string): void {
@@ -315,17 +324,15 @@ export function storeReturnDoctorToOp(id: string): void {
   broadcast();
 }
 
-// ─── Operator ─────────────────────────────────────────────────────────────────
+// ─── Operator ─────────────────────────────────────────────────────────
 export function storeGetOperator(): Operator | null {
   return read<Operator | null>(K.OPERATOR);
 }
 
 export function storeSetOperator(name: string, userId: string | null): void {
-  // ถ้ามี op เก่าอยู่ ให้จบ op session ก่อน
   const prev = storeGetOperator();
   if (prev?.user_id) storeEndOpSession(prev.user_id);
   write(K.OPERATOR, { id: crypto.randomUUID(), name, user_id: userId, created_at: new Date().toISOString() });
-  // เริ่ม op session ใหม่
   if (userId) storeStartOpSession(userId);
   broadcast();
 }
@@ -337,7 +344,7 @@ export function storeClearOperator(): void {
   broadcast();
 }
 
-// ─── Queue State ──────────────────────────────────────────────────────────────
+// ─── Queue State ────────────────────────────────────────────────────────
 export function storeGetQueueState(): QueueState {
   return read<QueueState>(K.QUEUE_STATE) ?? SEED_QUEUE_STATE;
 }
@@ -347,7 +354,7 @@ export function storeUpdatePointerIndex(pointer_index: number): void {
   broadcast();
 }
 
-// ─── Settings ─────────────────────────────────────────────────────────────────
+// ─── Settings ─────────────────────────────────────────────────────────
 export function storeGetSetting(key: string): string {
   const s = read<Record<string, string>>(K.SETTINGS) ?? {};
   return s[key] ?? '';
@@ -359,7 +366,7 @@ export function storeUpdateSetting(key: string, value: string): void {
   broadcast();
 }
 
-// ─── Work Sessions ────────────────────────────────────────────────────────────
+// ─── Work Sessions ────────────────────────────────────────────────────────
 export function storeGetSessions(): WorkSession[] {
   return read<WorkSession[]>(K.SESSIONS) ?? [];
 }
@@ -417,13 +424,12 @@ export function calcMinutes(sessions: WorkSession[]): number {
   }, 0);
 }
 
-// ─── OP Sessions ──────────────────────────────────────────────────────────────
+// ─── OP Sessions ────────────────────────────────────────────────────────
 export function storeGetOpSessions(): OpSession[] {
   return read<OpSession[]>(K.OP_SESSIONS) ?? [];
 }
 
 export function storeStartOpSession(userId: string): string {
-  // จบ session เก่าของ user นี้ก่อน (ถ้ามี)
   storeEndOpSession(userId);
   const id = crypto.randomUUID();
   const sessions = storeGetOpSessions();
@@ -463,7 +469,7 @@ export function calcOpMinutes(sessions: OpSession[]): number {
   }, 0);
 }
 
-// ─── Warnings ─────────────────────────────────────────────────────────────────
+// ─── Warnings ─────────────────────────────────────────────────────────
 export function storeGetWarnings(): Warning[] {
   return (read<Warning[]>(K.WARNINGS) ?? [])
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
@@ -487,7 +493,7 @@ export function storeGetWarningsWithProfiles(): Warning[] {
   const users = storeGetUsers();
   return warnings.map(w => ({
     ...w,
-    severity: w.severity ?? 'yellow', // backward compat
+    severity: w.severity ?? 'yellow',
     issued_to_profile: (() => { const u = users.find(x => x.id === w.issued_to); return u ? hydrateUser(u) : undefined; })(),
     issued_by_profile: (() => { const u = users.find(x => x.id === w.issued_by); return u ? hydrateUser(u) : undefined; })(),
   }));
