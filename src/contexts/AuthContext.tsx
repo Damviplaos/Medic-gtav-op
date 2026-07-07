@@ -3,6 +3,7 @@ import { supabase } from '@/db/supabase';
 import type { User } from '@supabase/supabase-js';
 import type { Profile } from '@/types/types';
 import { toast } from 'sonner';
+import { clockIn } from '@/services/settingsService';
 
 export async function getProfile(userId: string): Promise<Profile | null> {
   const { data, error } = await supabase
@@ -10,11 +11,7 @@ export async function getProfile(userId: string): Promise<Profile | null> {
     .select('*')
     .eq('id', userId)
     .maybeSingle();
-
-  if (error) {
-    console.error('โหลดโปรไฟล์ไม่สำเร็จ:', error);
-    return null;
-  }
+  if (error) { console.error('โหลดโปรไฟล์ไม่สำเร็จ:', error); return null; }
   return data as Profile | null;
 }
 
@@ -65,8 +62,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signInWithUsername = async (username: string, password: string) => {
     try {
       const email = `${username}@gta-fivem.local`;
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
+      // Clock-in: trigger attendance tracking on login
+      if (data.user) {
+        getProfile(data.user.id).then(p => {
+          if (p) clockIn(data.user!.id, p.ic_name ?? p.username).catch(console.error);
+        });
+      }
       return { error: null };
     } catch (error) {
       return { error: error as Error };

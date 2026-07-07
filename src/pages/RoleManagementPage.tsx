@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -6,21 +6,21 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Separator } from '@/components/ui/separator';
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
-} from '@/components/ui/dialog';
+import { Badge } from '@/components/ui/badge';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
-import { Plus, Trash2, GripVertical, ChevronDown, ChevronUp, Settings } from 'lucide-react';
+import { Plus, Trash2, ChevronDown, ChevronUp, Settings, ShieldCheck } from 'lucide-react';
 import {
   getRoles, createRole, updateRole, deleteRole, reorderRoles,
   upsertRoleCriteria, getRoleCriteria,
 } from '@/services/adminService';
+import { getRolePermissions, setRolePermission } from '@/services/settingsService';
 import { getChannels, updateChannelTrackTime } from '@/services/presenceService';
-import type { Role, RoleCriteria, Channel } from '@/types/types';
+import type { Role, RoleCriteria, Channel, RolePermission } from '@/types/types';
+import { ALL_PERMISSIONS } from '@/types/types';
 
 // =============================================
 // Role Criteria Editor
@@ -116,8 +116,72 @@ function RoleCriteriaEditor({ role }: { role: Role }) {
 }
 
 // =============================================
+// Permission Editor — Discord-style per role
+// =============================================
+function RolePermissionEditor({ role }: { role: Role }) {
+  const [perms, setPerms] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<string | null>(null);
+
+  useEffect(() => {
+    getRolePermissions(role.id).then(list => {
+      const map: Record<string, boolean> = {};
+      list.forEach((p: RolePermission) => { map[p.permission] = p.enabled; });
+      setPerms(map);
+      setLoading(false);
+    });
+  }, [role.id]);
+
+  const handleToggle = async (permKey: string, enabled: boolean) => {
+    setSaving(permKey);
+    try {
+      await setRolePermission(role.id, permKey, enabled);
+      setPerms(prev => ({ ...prev, [permKey]: enabled }));
+    } catch { toast.error('บันทึกสิทธิ์ไม่สำเร็จ'); }
+    finally { setSaving(null); }
+  };
+
+  // Group permissions
+  const groups = Array.from(new Set(ALL_PERMISSIONS.map(p => p.group)));
+
+  if (loading) return <Skeleton className="h-24 w-full" />;
+
+  return (
+    <div className="space-y-3 pt-1">
+      <div className="flex items-center gap-2">
+        <ShieldCheck className="w-3.5 h-3.5 text-accent" />
+        <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">สิทธิ์การใช้งาน (Discord-style)</p>
+      </div>
+      {groups.map(group => (
+        <div key={group} className="space-y-1.5">
+          <p className="text-[10px] text-muted-foreground/70 uppercase tracking-widest font-bold px-1">{group}</p>
+          <div className="rounded-sm border border-border overflow-hidden divide-y divide-border">
+            {ALL_PERMISSIONS.filter(p => p.group === group).map(p => (
+              <div key={p.key} className="flex items-center justify-between px-3 py-2 hover:bg-muted/30 transition-colors">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-foreground">{p.label}</p>
+                  <p className="text-[10px] text-muted-foreground font-mono">{p.key}</p>
+                </div>
+                <Switch
+                  checked={perms[p.key] ?? false}
+                  disabled={saving === p.key}
+                  onCheckedChange={v => handleToggle(p.key, v)}
+                  className="shrink-0"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// =============================================
 // Role Card (draggable row)
 // =============================================
+type TabType = 'settings' | 'criteria' | 'permissions';
+
 interface RoleCardProps {
   role: Role;
   index: number;
@@ -129,6 +193,7 @@ interface RoleCardProps {
 
 function RoleCard({ role, index, total, onDelete, onMove, onUpdate }: RoleCardProps) {
   const [expanded, setExpanded] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabType>('settings');
   const [editName, setEditName] = useState(role.name);
   const [editColor, setEditColor] = useState(role.color);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -148,11 +213,16 @@ function RoleCard({ role, index, total, onDelete, onMove, onUpdate }: RoleCardPr
     }
   };
 
+  const tabs: { key: TabType; label: string }[] = [
+    { key: 'settings', label: 'ทั่วไป' },
+    { key: 'criteria', label: 'เกณฑ์เลื่อนยศ' },
+    { key: 'permissions', label: 'สิทธิ์' },
+  ];
+
   return (
     <>
       <div className="rounded-sm border border-border bg-card overflow-hidden">
         <div className="flex items-center gap-2 px-3 py-2.5">
-          {/* Drag handle / reorder */}
           <div className="flex flex-col gap-0.5 shrink-0">
             <button onClick={() => onMove(role.id, 'up')} disabled={index === 0}
               className="text-muted-foreground hover:text-foreground disabled:opacity-30">
@@ -163,17 +233,11 @@ function RoleCard({ role, index, total, onDelete, onMove, onUpdate }: RoleCardPr
               <ChevronDown className="w-3 h-3" />
             </button>
           </div>
-
-          {/* Color dot */}
           <div className="w-3 h-3 rounded-full shrink-0 border"
             style={{ backgroundColor: editColor, borderColor: editColor + '88' }} />
-
-          {/* Name */}
           <span className="flex-1 min-w-0 text-sm font-semibold truncate" style={{ color: editColor }}>
             {role.name}
           </span>
-
-          {/* Actions */}
           <div className="flex items-center gap-1 shrink-0">
             <Button variant="ghost" size="icon" className="w-7 h-7" onClick={() => setExpanded(v => !v)}>
               <Settings className="w-3.5 h-3.5" />
@@ -186,30 +250,47 @@ function RoleCard({ role, index, total, onDelete, onMove, onUpdate }: RoleCardPr
         </div>
 
         {expanded && (
-          <div className="px-3 pb-3 border-t border-border space-y-3 pt-3">
-            <div className="flex items-center gap-3">
-              <div className="flex-1 space-y-1.5">
-                <Label className="text-xs text-muted-foreground">ชื่อยศ</Label>
-                <Input value={editName} onChange={e => setEditName(e.target.value)}
-                  className="h-7 text-sm bg-muted border-border" />
-              </div>
-              <div className="space-y-1.5 shrink-0">
-                <Label className="text-xs text-muted-foreground">สี</Label>
-                <div className="flex items-center gap-2">
-                  <input type="color" value={editColor}
-                    onChange={e => setEditColor(e.target.value)}
-                    className="w-8 h-7 rounded border border-border cursor-pointer bg-transparent" />
-                  <Input value={editColor} onChange={e => setEditColor(e.target.value)}
-                    className="h-7 text-xs bg-muted border-border w-24" />
-                </div>
-              </div>
-              <Button size="sm" onClick={handleSaveName} disabled={saving}
-                className="self-end h-7 text-xs bg-primary text-primary-foreground hover:opacity-90">
-                {saving ? '...' : 'บันทึก'}
-              </Button>
+          <div className="border-t border-border">
+            {/* Tab bar */}
+            <div className="flex border-b border-border bg-muted/30">
+              {tabs.map(t => (
+                <button key={t.key} onClick={() => setActiveTab(t.key)}
+                  className={`px-3 py-2 text-xs font-semibold transition-colors ${activeTab === t.key ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground hover:text-foreground'}`}>
+                  {t.label}
+                </button>
+              ))}
             </div>
-            <Separator />
-            <RoleCriteriaEditor role={{ ...role, name: editName, color: editColor }} />
+            <div className="px-3 pb-3 pt-3">
+              {activeTab === 'settings' && (
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div className="flex-1 min-w-32 space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">ชื่อยศ</Label>
+                    <Input value={editName} onChange={e => setEditName(e.target.value)}
+                      className="h-7 text-sm bg-muted border-border" />
+                  </div>
+                  <div className="space-y-1.5 shrink-0">
+                    <Label className="text-xs text-muted-foreground">สี</Label>
+                    <div className="flex items-center gap-2">
+                      <input type="color" value={editColor}
+                        onChange={e => setEditColor(e.target.value)}
+                        className="w-8 h-7 rounded border border-border cursor-pointer bg-transparent" />
+                      <Input value={editColor} onChange={e => setEditColor(e.target.value)}
+                        className="h-7 text-xs bg-muted border-border w-24" />
+                    </div>
+                  </div>
+                  <Button size="sm" onClick={handleSaveName} disabled={saving}
+                    className="self-end h-7 text-xs bg-primary text-primary-foreground hover:opacity-90">
+                    {saving ? '...' : 'บันทึก'}
+                  </Button>
+                </div>
+              )}
+              {activeTab === 'criteria' && (
+                <RoleCriteriaEditor role={{ ...role, name: editName, color: editColor }} />
+              )}
+              {activeTab === 'permissions' && (
+                <RolePermissionEditor role={role} />
+              )}
+            </div>
           </div>
         )}
       </div>
