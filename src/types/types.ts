@@ -160,6 +160,16 @@ export interface SystemSetting {
   updated_at: string;
 }
 
+export interface WeeklyStatsHistory {
+  id: string;
+  user_id: string;
+  week_start: string;
+  total_work_seconds: number;
+  total_op_seconds: number;
+  archived_at: string;
+  profile?: Profile;
+}
+
 export const ALL_PERMISSIONS = [
   { key: 'view_queue', label: 'ดูหน้าคิวงาน', group: 'ทั่วไป' },
   { key: 'view_own_dashboard', label: 'ดู Dashboard ส่วนตัว', group: 'ทั่วไป' },
@@ -171,6 +181,10 @@ export const ALL_PERMISSIONS = [
   { key: 'issue_warnings', label: 'ออกใบเตือน', group: 'แอดมิน' },
   { key: 'manage_settings', label: 'ตั้งค่าระบบ', group: 'แอดมิน' },
   { key: 'reset_queue', label: 'รีเซ็ตคิว', group: 'แอดมิน' },
+  { key: 'edit_player_profile', label: 'แก้ไขโปรไฟล์ผู้เล่น (ชื่อเล่น/ชื่อในเกม/รหัสผ่าน)', group: 'แอดมิน' },
+  { key: 'manage_matchmaking', label: 'จัดการระบบจับคู่ (Matchmaking)', group: 'แอดมิน' },
+  { key: 'view_weekly_history', label: 'ดูประวัติสถิติรายสัปดาห์ย้อนหลัง', group: 'แอดมิน' },
+  { key: 'archive_weekly_stats', label: 'อาร์ไคฟ์/รีเซ็ตสถิติรายสัปดาห์ด้วยตนเอง', group: 'แอดมิน' },
 ] as const;
 
 export type PermissionKey = typeof ALL_PERMISSIONS[number]['key'];

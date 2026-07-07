@@ -150,16 +150,18 @@ export function useQueue() {
     }
   }, []);
 
-  // Group presenceList by channel
+  // OP list
+  const opList = presenceList.filter(p => p.is_op);
+  const opUserIds = new Set(opList.map(p => p.user_id));
+
+  // Group presenceList by channel; hide OP users from the ready channel to avoid duplicate display
   const presenceByChannel = channels.reduce<Record<string, PresenceWithProfile[]>>((acc, ch) => {
+    const isReadyChannel = ch.name === 'ready';
     acc[ch.id] = presenceList
-      .filter(p => p.channel_id === ch.id)
+      .filter(p => p.channel_id === ch.id && !(isReadyChannel && opUserIds.has(p.user_id)))
       .sort((a, b) => new Date(a.joined_channel_at).getTime() - new Date(b.joined_channel_at).getTime());
     return acc;
   }, {});
-
-  // OP list
-  const opList = presenceList.filter(p => p.is_op);
 
   return {
     presenceList,

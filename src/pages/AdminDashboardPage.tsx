@@ -16,7 +16,10 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { CheckCircle, XCircle, Clock, Star, AlertTriangle, Search, RefreshCw, User, Plus } from 'lucide-react';
+import {
+  CheckCircle, XCircle, Clock, Star, AlertTriangle, Search, RefreshCw, User, Plus,
+  UserX, ChevronDown,
+} from 'lucide-react';
 import {
   getAllProfiles, getAllWeeklyStats, getUserRoles, getWeekStart,
   getRoleCriteria, refreshWeeklyStats,
@@ -24,7 +27,8 @@ import {
 import {
   getUserDetailStats, getUserWarnings, issueWarning, deactivateWarning,
 } from '@/services/settingsService';
-import type { Profile, Role, WeeklyStats, Warning } from '@/types/types';
+import { supabase } from '@/db/supabase';
+import type { Profile, Role, WeeklyStats, Warning, InactiveUser, WeeklyStatsHistory } from '@/types/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
 
@@ -243,15 +247,213 @@ function UserDetailDialog({ user, roles, weekStats, onClose, issuerId }: {
 }
 
 // =============================================
-// Filter types
+// Filter / Tab types
 // =============================================
-type FilterType = 'all' | 'online' | 'eligible' | 'has_warnings';
+type FilterType = 'all' | 'eligible' | 'has_warnings';
+type TabType = 'overview' | 'inactivity' | 'history';
 
-// =============================================
-// Admin Dashboard v2
-// =============================================
 interface UserRow { profile: Profile; roles: Role[]; stats: WeeklyStats | null; eligible: boolean; activeWarnings: number; }
 
+// =============================================
+// Inactivity tab (inline from InactivityPage)
+// =============================================
+function InactivityTab() {
+  const [users, setUsers] = useState<InactiveUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [threshold, setThreshold] = useState(24);
+  const [search, setSearch] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.rpc('get_inactive_users', { p_threshold_hours: threshold });
+      if (error) throw error;
+      setUsers((data ?? []) as InactiveUser[]);
+    } catch { toast.error('โหลดข้อมูลไม่สำเร็จ'); }
+    finally { setLoading(false); }
+  }, [threshold]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = users.filter(u => {
+    const q = search.toLowerCase();
+    return !q || u.username.toLowerCase().includes(q) ||
+      (u.nickname?.toLowerCase() ?? '').includes(q) ||
+      (u.ic_name?.toLowerCase() ?? '').includes(q);
+  });
+
+  const getBadge = (h: number) => h >= 72 ? { label: 'ขาดนาน', cls: 'bg-destructive/20 text-destructive border-destructive/30' }
+    : h >= 48 ? { label: '2+ วัน', cls: 'bg-warning/20 text-warning border-warning/30' }
+    : { label: '24h+', cls: 'border-border text-muted-foreground' };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-muted-foreground">เกณฑ์ขาดงาน</span>
+          <Select value={String(threshold)} onValueChange={v => setThreshold(Number(v))}>
+            <SelectTrigger className="h-8 w-24 text-xs bg-muted border-border"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="12">12 ชม.</SelectItem>
+              <SelectItem value="24">24 ชม.</SelectItem>
+              <SelectItem value="48">48 ชม.</SelectItem>
+              <SelectItem value="72">72 ชม.</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="relative ml-auto">
+          <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <Input placeholder="ค้นหา..." value={search} onChange={e => setSearch(e.target.value)}
+            className="pl-7 h-8 text-sm w-40 bg-muted border-border" />
+        </div>
+        <Button variant="outline" size="sm" className="h-8" onClick={load}>
+          <RefreshCw className="w-3.5 h-3.5 mr-1" /> รีเฟรช
+        </Button>
+      </div>
+      <Card className="border-border min-w-0">
+        <CardContent className="p-0">
+          <div className="overflow-x-auto w-full">
+            <table className="w-full min-w-max text-sm">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="text-left px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">ชื่อ</th>
+                  <th className="text-right px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">ขาดงาน</th>
+                  <th className="text-center px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">ระดับ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? Array.from({ length: 3 }).map((_, i) => (
+                  <tr key={i}>{[1,2,3].map(j => <td key={j} className="px-4 py-2"><Skeleton className="h-4 w-full" /></td>)}</tr>
+                )) : filtered.length === 0 ? (
+                  <tr><td colSpan={3} className="text-center py-8 text-muted-foreground text-sm">ไม่พบสมาชิกที่ขาดงาน</td></tr>
+                ) : filtered.map(u => {
+                  const b = getBadge(u.hours_absent);
+                  return (
+                    <tr key={u.user_id} className="border-b border-border/50">
+                      <td className="px-4 py-2.5 whitespace-nowrap">
+                        <div className="flex items-center gap-2">
+                          <UserX className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                          <span className="font-medium">{u.nickname || u.username}</span>
+                          {u.ic_name && <span className="text-xs text-muted-foreground hidden md:block">[{u.ic_name}]</span>}
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono text-xs whitespace-nowrap">
+                        {u.hours_absent.toFixed(1)} ชม.
+                      </td>
+                      <td className="px-4 py-2.5 text-center whitespace-nowrap">
+                        <Badge variant="outline" className={`text-xs ${b.cls}`}>{b.label}</Badge>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// =============================================
+// History tab
+// =============================================
+function HistoryTab() {
+  const [history, setHistory] = useState<Array<{
+    id: string; user_id: string; week_start: string;
+    total_work_seconds: number; total_op_seconds: number; archived_at: string;
+    profile?: { username: string; nickname: string | null; ic_name: string | null };
+  }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [archiving, setArchiving] = useState(false);
+  const [weekFilter, setWeekFilter] = useState('all');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { getWeeklyHistory } = await import('@/services/settingsService');
+      setHistory(await getWeeklyHistory());
+    } catch { toast.error('โหลดประวัติไม่สำเร็จ'); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleArchive = async () => {
+    setArchiving(true);
+    try {
+      const { archiveAndResetWeeklyStats } = await import('@/services/settingsService');
+      await archiveAndResetWeeklyStats();
+      toast.success('อาร์ไคฟ์สถิติสัปดาห์นี้สำเร็จ');
+      load();
+    } catch { toast.error('อาร์ไคฟ์ไม่สำเร็จ'); }
+    finally { setArchiving(false); }
+  };
+
+  const weekOptions = ['all', ...Array.from(new Set(history.map(h => h.week_start))).sort().reverse()];
+  const filtered = weekFilter === 'all' ? history : history.filter(h => h.week_start === weekFilter);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <Select value={weekFilter} onValueChange={setWeekFilter}>
+          <SelectTrigger className="h-8 w-40 text-xs bg-muted border-border"><SelectValue placeholder="เลือกสัปดาห์" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">ทุกสัปดาห์</SelectItem>
+            {weekOptions.filter(w => w !== 'all').map(w => (
+              <SelectItem key={w} value={w}>สัปดาห์ {w}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button variant="outline" size="sm" className="h-8" onClick={load}>
+          <RefreshCw className="w-3.5 h-3.5 mr-1" /> รีเฟรช
+        </Button>
+        <Button size="sm" className="h-8 ml-auto bg-primary text-primary-foreground hover:opacity-90"
+          onClick={handleArchive} disabled={archiving}>
+          {archiving ? 'กำลังอาร์ไคฟ์...' : 'อาร์ไคฟ์สัปดาห์นี้'}
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">ระบบจะรีเซ็ตสถิติทุกวันจันทร์ 00:00 น. (ICT) อัตโนมัติ และเก็บประวัติไว้ 14 วัน</p>
+      <Card className="border-border min-w-0">
+        <CardContent className="p-0">
+          <div className="overflow-x-auto w-full">
+            <table className="w-full min-w-max text-sm">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="text-left px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">ชื่อ</th>
+                  <th className="text-left px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">สัปดาห์</th>
+                  <th className="text-right px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">งาน</th>
+                  <th className="text-right px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">OP</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? Array.from({ length: 4 }).map((_, i) => (
+                  <tr key={i}>{[1,2,3,4].map(j => <td key={j} className="px-4 py-2"><Skeleton className="h-4 w-full" /></td>)}</tr>
+                )) : filtered.length === 0 ? (
+                  <tr><td colSpan={4} className="text-center py-8 text-muted-foreground text-sm">ยังไม่มีประวัติสถิติ</td></tr>
+                ) : filtered.map(h => (
+                  <tr key={h.id} className="border-b border-border/50">
+                    <td className="px-4 py-2.5 whitespace-nowrap font-medium">
+                      {h.profile?.nickname || h.profile?.username || '?'}
+                      {h.profile?.ic_name && <span className="text-xs text-muted-foreground ml-1.5 hidden md:inline">[{h.profile.ic_name}]</span>}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">{h.week_start}</td>
+                    <td className="px-4 py-2.5 text-right font-mono text-xs whitespace-nowrap">{fmtTime(h.total_work_seconds)}</td>
+                    <td className="px-4 py-2.5 text-right font-mono text-xs text-warning whitespace-nowrap">{fmtTime(h.total_op_seconds)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// =============================================
+// Admin Dashboard v3
+// =============================================
 export default function AdminDashboardPage() {
   const { profile: myProfile } = useAuth();
   const [rows, setRows] = useState<UserRow[]>([]);
@@ -259,6 +461,7 @@ export default function AdminDashboardPage() {
   const [filter, setFilter] = useState<FilterType>('all');
   const [search, setSearch] = useState('');
   const [selectedUser, setSelectedUser] = useState<UserRow | null>(null);
+  const [activeTab, setActiveTab] = useState<TabType>('overview');
   const weekStart = getWeekStart();
 
   const loadData = useCallback(async () => {
@@ -295,107 +498,139 @@ export default function AdminDashboardPage() {
       (r.profile.nickname?.toLowerCase() ?? '').includes(q) ||
       (r.profile.ic_name?.toLowerCase() ?? '').includes(q);
     const matchFilter =
-      filter === 'all' ? true :
       filter === 'eligible' ? r.eligible :
       filter === 'has_warnings' ? r.activeWarnings > 0 : true;
     return matchSearch && matchFilter;
   });
 
-  const filterButtons: { key: FilterType; label: string; count?: number }[] = [
-    { key: 'all', label: 'ทั้งหมด', count: rows.length },
-    { key: 'eligible', label: '✓ ผ่านเกณฑ์', count: rows.filter(r => r.eligible).length },
-    { key: 'has_warnings', label: '⚠ มีใบเตือน', count: rows.filter(r => r.activeWarnings > 0).length },
+  const tabs: { key: TabType; label: string; badge?: number }[] = [
+    { key: 'overview', label: 'ภาพรวมสมาชิก', badge: rows.length },
+    { key: 'inactivity', label: 'ไม่มาทำงาน' },
+    { key: 'history', label: 'ประวัติสถิติ' },
   ];
 
   return (
     <div className="p-4 space-y-4">
+      {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-lg font-bold">ภาพรวมหน่วยงาน</h1>
           <p className="text-xs text-muted-foreground">สัปดาห์เริ่ม {weekStart}</p>
         </div>
-        <Button variant="outline" size="sm" onClick={loadData} className="h-8">
-          <RefreshCw className="w-3.5 h-3.5 mr-1" /> รีเฟรช
-        </Button>
+        {activeTab === 'overview' && (
+          <Button variant="outline" size="sm" onClick={loadData} className="h-8">
+            <RefreshCw className="w-3.5 h-3.5 mr-1" /> รีเฟรช
+          </Button>
+        )}
       </div>
 
-      {/* Filters */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {filterButtons.map(fb => (
-          <button key={fb.key} onClick={() => setFilter(fb.key)}
-            className={`px-3 py-1.5 rounded-sm text-xs font-semibold border transition-colors ${
-              filter === fb.key ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/50'
+      {/* Tabs */}
+      <div className="flex gap-1 border-b border-border">
+        {tabs.map(t => (
+          <button key={t.key} onClick={() => setActiveTab(t.key)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+              activeTab === t.key
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
             }`}>
-            {fb.label} {fb.count !== undefined && `(${fb.count})`}
+            {t.label}
+            {t.badge !== undefined && (
+              <span className="text-xs bg-muted text-muted-foreground px-1.5 py-0.5 rounded-full">{t.badge}</span>
+            )}
           </button>
         ))}
-        <div className="relative ml-auto">
-          <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input placeholder="ค้นหา..." value={search} onChange={e => setSearch(e.target.value)}
-            className="pl-7 h-8 text-sm w-44 bg-muted border-border" />
-        </div>
       </div>
 
-      {/* Table */}
-      <Card className="border-border min-w-0">
-        <CardContent className="p-0">
-          <div className="overflow-x-auto w-full">
-            <table className="w-full min-w-max text-sm">
-              <thead>
-                <tr className="border-b border-border">
-                  <th className="text-left px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">ชื่อ</th>
-                  <th className="text-left px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">ยศ</th>
-                  <th className="text-right px-4 py-2 text-xs text-muted-foreground whitespace-nowrap"><Clock className="w-3 h-3 inline mr-1" />งาน</th>
-                  <th className="text-right px-4 py-2 text-xs text-muted-foreground whitespace-nowrap"><Star className="w-3 h-3 inline mr-1" />OP</th>
-                  <th className="text-center px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">เกณฑ์</th>
-                  <th className="text-center px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">ใบเตือน</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? Array.from({ length: 4 }).map((_, i) => (
-                  <tr key={i}>{Array.from({ length: 6 }).map((_, j) => (
-                    <td key={j} className="px-4 py-2"><Skeleton className="h-4 w-full" /></td>
-                  ))}</tr>
-                )) : filtered.length === 0 ? (
-                  <tr><td colSpan={6} className="text-center py-8 text-muted-foreground text-sm">ไม่พบข้อมูล</td></tr>
-                ) : filtered.map(row => (
-                  <tr key={row.profile.id}
-                    className="border-b border-border/50 hover:bg-muted/30 transition-colors cursor-pointer"
-                    onClick={() => setSelectedUser(row)}>
-                    <td className="px-4 py-2.5 whitespace-nowrap">
-                      <div className="flex items-center gap-2">
-                        <User className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                        <span className="font-medium">{row.profile.nickname || row.profile.username}</span>
-                        {row.profile.ic_name && <span className="text-xs text-muted-foreground hidden md:block">[{row.profile.ic_name}]</span>}
-                      </div>
-                    </td>
-                    <td className="px-4 py-2.5 whitespace-nowrap">
-                      <div className="flex flex-wrap gap-1">
-                        {row.roles.slice(0, 2).map(r => (
-                          <span key={r.id} className="role-badge" style={{ color: r.color, borderColor: r.color + '44' }}>{r.name}</span>
-                        ))}
-                        {!row.roles.length && <span className="text-xs text-muted-foreground">-</span>}
-                      </div>
-                    </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-xs whitespace-nowrap">{fmtTime(row.stats?.total_work_seconds ?? 0)}</td>
-                    <td className="px-4 py-2.5 text-right font-mono text-xs text-warning whitespace-nowrap">{fmtTime(row.stats?.total_op_seconds ?? 0)}</td>
-                    <td className="px-4 py-2.5 text-center whitespace-nowrap">
-                      {row.eligible
-                        ? <Badge className="bg-success/20 text-success border-success/30 text-xs">✓</Badge>
-                        : <Badge variant="outline" className="text-muted-foreground text-xs">-</Badge>}
-                    </td>
-                    <td className="px-4 py-2.5 text-center whitespace-nowrap">
-                      {row.activeWarnings > 0
-                        ? <span className="text-xs font-bold text-warning">{row.activeWarnings}</span>
-                        : <span className="text-xs text-muted-foreground">0</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {/* Tab: Overview */}
+      {activeTab === 'overview' && (
+        <>
+          {/* Dropdown filters + search */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <Select value={filter} onValueChange={v => setFilter(v as FilterType)}>
+              <SelectTrigger className="h-8 w-40 text-xs bg-muted border-border">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">ทั้งหมด ({rows.length})</SelectItem>
+                <SelectItem value="eligible">✓ ผ่านเกณฑ์ ({rows.filter(r => r.eligible).length})</SelectItem>
+                <SelectItem value="has_warnings">⚠ มีใบเตือน ({rows.filter(r => r.activeWarnings > 0).length})</SelectItem>
+              </SelectContent>
+            </Select>
+            <div className="relative ml-auto">
+              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input placeholder="ค้นหา..." value={search} onChange={e => setSearch(e.target.value)}
+                className="pl-7 h-8 text-sm w-44 bg-muted border-border" />
+            </div>
           </div>
-        </CardContent>
-      </Card>
+
+          {/* Table */}
+          <Card className="border-border min-w-0">
+            <CardContent className="p-0">
+              <div className="overflow-x-auto w-full">
+                <table className="w-full min-w-max text-sm">
+                  <thead>
+                    <tr className="border-b border-border">
+                      <th className="text-left px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">ชื่อ</th>
+                      <th className="text-left px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">ยศ</th>
+                      <th className="text-right px-4 py-2 text-xs text-muted-foreground whitespace-nowrap"><Clock className="w-3 h-3 inline mr-1" />งาน</th>
+                      <th className="text-right px-4 py-2 text-xs text-muted-foreground whitespace-nowrap"><Star className="w-3 h-3 inline mr-1" />OP</th>
+                      <th className="text-center px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">เกณฑ์</th>
+                      <th className="text-center px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">ใบเตือน</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loading ? Array.from({ length: 4 }).map((_, i) => (
+                      <tr key={i}>{Array.from({ length: 6 }).map((_, j) => (
+                        <td key={j} className="px-4 py-2"><Skeleton className="h-4 w-full" /></td>
+                      ))}</tr>
+                    )) : filtered.length === 0 ? (
+                      <tr><td colSpan={6} className="text-center py-8 text-muted-foreground text-sm">ไม่พบข้อมูล</td></tr>
+                    ) : filtered.map(row => (
+                      <tr key={row.profile.id}
+                        className="border-b border-border/50 hover:bg-muted/30 transition-colors cursor-pointer"
+                        onClick={() => setSelectedUser(row)}>
+                        <td className="px-4 py-2.5 whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            <User className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                            <span className="font-medium">{row.profile.nickname || row.profile.username}</span>
+                            {row.profile.ic_name && <span className="text-xs text-muted-foreground hidden md:block">[{row.profile.ic_name}]</span>}
+                          </div>
+                        </td>
+                        <td className="px-4 py-2.5 whitespace-nowrap">
+                          <div className="flex flex-wrap gap-1">
+                            {row.roles.slice(0, 2).map(r => (
+                              <span key={r.id} className="role-badge" style={{ color: r.color, borderColor: r.color + '44' }}>{r.name}</span>
+                            ))}
+                            {!row.roles.length && <span className="text-xs text-muted-foreground">-</span>}
+                          </div>
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-mono text-xs whitespace-nowrap">{fmtTime(row.stats?.total_work_seconds ?? 0)}</td>
+                        <td className="px-4 py-2.5 text-right font-mono text-xs text-warning whitespace-nowrap">{fmtTime(row.stats?.total_op_seconds ?? 0)}</td>
+                        <td className="px-4 py-2.5 text-center whitespace-nowrap">
+                          {row.eligible
+                            ? <Badge className="bg-success/20 text-success border-success/30 text-xs">✓</Badge>
+                            : <Badge variant="outline" className="text-muted-foreground text-xs">-</Badge>}
+                        </td>
+                        <td className="px-4 py-2.5 text-center whitespace-nowrap">
+                          {row.activeWarnings > 0
+                            ? <span className="text-xs font-bold text-warning">{row.activeWarnings}</span>
+                            : <span className="text-xs text-muted-foreground">0</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
+
+      {/* Tab: Inactivity */}
+      {activeTab === 'inactivity' && <InactivityTab />}
+
+      {/* Tab: History */}
+      {activeTab === 'history' && <HistoryTab />}
 
       {/* User detail popup */}
       {selectedUser && (
